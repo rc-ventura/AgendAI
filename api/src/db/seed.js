@@ -23,6 +23,15 @@ function seed(db) {
     insertPaciente.run('Lucas Pereira', 'lucas@email.com', '11999990005');
 
     // Horários — próximos 7 dias úteis
+    // Use local-time formatting (not toISOString, which is UTC) so the calendar
+    // day matches d.getDay() and the API's date filter behaves predictably in
+    // any server timezone.
+    const formatLocalDate = (d) => {
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    };
     const hoje = new Date();
     const horarios = [];
     let diaOffset = 1;
@@ -31,7 +40,7 @@ function seed(db) {
       d.setDate(hoje.getDate() + diaOffset);
       const diaSemana = d.getDay();
       if (diaSemana !== 0 && diaSemana !== 6) {
-        const dateStr = d.toISOString().slice(0, 10);
+        const dateStr = formatLocalDate(d);
         const medicos = [m1.lastInsertRowid, m2.lastInsertRowid, m3.lastInsertRowid];
         const horas = ['09:00:00', '11:00:00', '14:00:00', '16:00:00'];
         const medicoId = medicos[horarios.length % 3];
