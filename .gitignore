@@ -1,0 +1,22 @@
+# Environment
+.env
+
+# SQLite database
+data/clinica.db
+*.db
+*.sqlite
+
+# Node
+node_modules/
+npm-debug.log*
+
+# N8N runtime data (but keep .gitkeep)
+n8n/data/*
+!n8n/data/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+coverage/

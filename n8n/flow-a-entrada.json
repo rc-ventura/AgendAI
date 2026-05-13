@@ -1,0 +1,138 @@
+{
+  "name": "flow-a-entrada",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "chat",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "webhook-chat",
+      "name": "Chat Trigger (Webhook /chat)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "chat-webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "audio-check",
+              "leftValue": "={{ $json.body.type }}",
+              "rightValue": "audio",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-audio",
+      "name": "É Mensagem de Áudio?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "workflowId": "FLOW_C_AUDIO_ID",
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "binary": "={{ $json.body }}",
+            "type": "audio"
+          },
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "executar-flow-c",
+      "name": "Processar Áudio (Flow C)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "workflowId": "FLOW_B_AI_CORE_ID",
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "text": "={{ $json.body.text }}",
+            "type": "text"
+          },
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "executar-flow-b",
+      "name": "Processar Texto (Flow B)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond-a",
+      "name": "Responder ao Chat",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {},
+      "id": "error-trigger-a",
+      "name": "Capturar Erros do Flow A",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [240, 500]
+    }
+  ],
+  "connections": {
+    "Chat Trigger (Webhook /chat)": {
+      "main": [[{ "node": "É Mensagem de Áudio?", "type": "main", "index": 0 }]]
+    },
+    "É Mensagem de Áudio?": {
+      "main": [
+        [{ "node": "Processar Áudio (Flow C)", "type": "main", "index": 0 }],
+        [{ "node": "Processar Texto (Flow B)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Processar Áudio (Flow C)": {
+      "main": [[{ "node": "Responder ao Chat", "type": "main", "index": 0 }]]
+    },
+    "Processar Texto (Flow B)": {
+      "main": [[{ "node": "Responder ao Chat", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "flow-a-v1",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "agendai"
+  },
+  "id": "flow-a-entrada",
+  "tags": []
+}

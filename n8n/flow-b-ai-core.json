@@ -1,0 +1,454 @@
+{
+  "name": "flow-b-ai-core",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-b",
+      "name": "Receber Mensagem de Texto",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "messages",
+              "name": "messages",
+              "value": "=[{ \"role\": \"user\", \"content\": {{ JSON.stringify($json.text) }} }]",
+              "type": "array"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-historico",
+      "name": "Montar Histórico de Mensagens",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "operation": "complete",
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "Você é AgendAI, assistente de agendamento médico da Clínica Saúde.\n\nRegras:\n1. SEMPRE use as functions fornecidas para responder perguntas sobre horários, agendamentos, cancelamentos e pagamentos. Nunca invente dados.\n2. Para agendar: primeiro chame buscar_horarios_disponiveis para mostrar opções, confirme com o paciente, depois chame buscar_paciente para validar o e-mail, e só então chame criar_agendamento.\n3. Para cancelar: peça o ID do agendamento se o paciente não informou.\n4. Responda no mesmo idioma que o paciente usar (português ou inglês).\n5. Seja cordial e objetivo. Saudações e despedidas não precisam de function call.",
+              "role": "system"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.2
+        },
+        "tools": {
+          "values": [
+            {
+              "type": "function",
+              "function": {
+                "name": "buscar_horarios_disponiveis",
+                "description": "Busca horários médicos disponíveis para agendamento. Use quando o paciente perguntar sobre horários ou datas disponíveis.",
+                "parameters": {
+                  "properties": [
+                    {
+                      "name": "data",
+                      "description": "Data no formato YYYY-MM-DD. Opcional — sem data retorna todos os disponíveis nos próximos dias.",
+                      "type": "string"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "function",
+              "function": {
+                "name": "criar_agendamento",
+                "description": "Agenda uma consulta para o paciente em um horário disponível. Use após o paciente confirmar o horário desejado. Requer e-mail do paciente e ID do horário.",
+                "parameters": {
+                  "properties": [
+                    {
+                      "name": "paciente_email",
+                      "description": "E-mail cadastrado do paciente. Obter do contexto da conversa ou chamar buscar_paciente se necessário.",
+                      "type": "string",
+                      "required": true
+                    },
+                    {
+                      "name": "horario_id",
+                      "description": "ID do horário desejado (obtido de buscar_horarios_disponiveis).",
+                      "type": "number",
+                      "required": true
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "function",
+              "function": {
+                "name": "cancelar_agendamento",
+                "description": "Cancela um agendamento existente. Use quando o paciente solicitar cancelamento. Requer o ID do agendamento.",
+                "parameters": {
+                  "properties": [
+                    {
+                      "name": "agendamento_id",
+                      "description": "ID numérico do agendamento a cancelar.",
+                      "type": "number",
+                      "required": true
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "function",
+              "function": {
+                "name": "buscar_pagamentos",
+                "description": "Retorna valores de consulta e formas de pagamento aceitas. Use quando o paciente perguntar sobre preços ou como pagar.",
+                "parameters": {
+                  "properties": []
+                }
+              }
+            },
+            {
+              "type": "function",
+              "function": {
+                "name": "buscar_paciente",
+                "description": "Busca os dados de um paciente pelo e-mail. Use quando precisar confirmar se o e-mail informado pelo paciente está cadastrado antes de criar um agendamento.",
+                "parameters": {
+                  "properties": [
+                    {
+                      "name": "email",
+                      "description": "E-mail declarado pelo paciente na conversa.",
+                      "type": "string",
+                      "required": true
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "id": "openai-chat",
+      "name": "GPT-4o-mini com Function Calling",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [680, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message.tool_calls[0].function.name }}",
+                    "rightValue": "buscar_horarios_disponiveis",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "buscar_horarios"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message.tool_calls[0].function.name }}",
+                    "rightValue": "criar_agendamento",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "criar_agendamento"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message.tool_calls[0].function.name }}",
+                    "rightValue": "cancelar_agendamento",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "cancelar_agendamento"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message.tool_calls[0].function.name }}",
+                    "rightValue": "buscar_pagamentos",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "buscar_pagamentos"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message.tool_calls[0].function.name }}",
+                    "rightValue": "buscar_paciente",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "buscar_paciente"
+            }
+          ]
+        },
+        "fallbackOutput": "extra",
+        "options": {}
+      },
+      "id": "switch-function",
+      "name": "Identificar Function Chamada",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.API_BASE_URL }}/horarios/disponiveis{{ $json.message.tool_calls[0].function.arguments ? '?data=' + JSON.parse($json.message.tool_calls[0].function.arguments).data : '' }}",
+        "options": {}
+      },
+      "id": "http-horarios",
+      "name": "Buscar Horários na API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.API_BASE_URL }}/agendamentos",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "paciente_email",
+              "value": "={{ JSON.parse($('GPT-4o-mini com Function Calling').item.json.message.tool_calls[0].function.arguments).paciente_email }}"
+            },
+            {
+              "name": "horario_id",
+              "value": "={{ JSON.parse($('GPT-4o-mini com Function Calling').item.json.message.tool_calls[0].function.arguments).horario_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "http-criar-agendamento",
+      "name": "Criar Agendamento na API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 220]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.API_BASE_URL }}/agendamentos/{{ JSON.parse($('GPT-4o-mini com Function Calling').item.json.message.tool_calls[0].function.arguments).agendamento_id }}/cancelar",
+        "options": {}
+      },
+      "id": "http-cancelar",
+      "name": "Cancelar Agendamento na API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 340]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.API_BASE_URL }}/pagamentos",
+        "options": {}
+      },
+      "id": "http-pagamentos",
+      "name": "Buscar Pagamentos na API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 460]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.API_BASE_URL }}/pacientes/{{ JSON.parse($('GPT-4o-mini com Function Calling').item.json.message.tool_calls[0].function.arguments).email }}",
+        "options": {}
+      },
+      "id": "http-paciente",
+      "name": "Buscar Paciente na API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 580]
+    },
+    {
+      "parameters": {
+        "workflowId": "FLOW_D_EMAIL_ID",
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "tipo": "agendamento",
+            "paciente_email": "={{ $json.paciente.email }}",
+            "paciente_nome": "={{ $json.paciente.nome }}",
+            "medico_nome": "={{ $json.medico.nome }}",
+            "data_hora": "={{ $json.horario.data_hora }}",
+            "valor": "150",
+            "formas_pagamento": "PIX, Cartão de Débito, Cartão de Crédito, Dinheiro"
+          },
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "chamar-flow-d-agendamento",
+      "name": "Notificar por E-mail (Agendamento)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [1340, 220]
+    },
+    {
+      "parameters": {
+        "workflowId": "FLOW_D_EMAIL_ID",
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "tipo": "cancelamento",
+            "paciente_email": "={{ $('Criar Agendamento na API').item.json.paciente.email }}",
+            "paciente_nome": "={{ $('Criar Agendamento na API').item.json.paciente.nome }}",
+            "medico_nome": "={{ $('Cancelar Agendamento na API').item.json.medico_nome ?? 'médico' }}",
+            "data_hora": "={{ $('Cancelar Agendamento na API').item.json.data_hora ?? '' }}"
+          },
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "chamar-flow-d-cancelamento",
+      "name": "Notificar por E-mail (Cancelamento)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [1340, 340]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "resposta",
+              "name": "resposta",
+              "value": "={{ $('GPT-4o-mini com Function Calling').item.json.message.content ?? 'Olá! Posso ajudá-lo com horários, agendamentos, cancelamentos ou informações de pagamento.' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-resposta-direta",
+      "name": "Formatar Resposta Direta",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1120, 700]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { text: $json.resposta ?? JSON.stringify($json) } }}",
+        "options": {}
+      },
+      "id": "respond-webhook",
+      "name": "Responder ao Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {},
+      "id": "error-trigger-b",
+      "name": "Capturar Erros do Flow B",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [240, 500]
+    }
+  ],
+  "connections": {
+    "Receber Mensagem de Texto": {
+      "main": [[{ "node": "Montar Histórico de Mensagens", "type": "main", "index": 0 }]]
+    },
+    "Montar Histórico de Mensagens": {
+      "main": [[{ "node": "GPT-4o-mini com Function Calling", "type": "main", "index": 0 }]]
+    },
+    "GPT-4o-mini com Function Calling": {
+      "main": [[{ "node": "Identificar Function Chamada", "type": "main", "index": 0 }]]
+    },
+    "Identificar Function Chamada": {
+      "main": [
+        [{ "node": "Buscar Horários na API", "type": "main", "index": 0 }],
+        [{ "node": "Criar Agendamento na API", "type": "main", "index": 0 }],
+        [{ "node": "Cancelar Agendamento na API", "type": "main", "index": 0 }],
+        [{ "node": "Buscar Pagamentos na API", "type": "main", "index": 0 }],
+        [{ "node": "Buscar Paciente na API", "type": "main", "index": 0 }],
+        [{ "node": "Formatar Resposta Direta", "type": "main", "index": 0 }]
+      ]
+    },
+    "Buscar Horários na API": {
+      "main": [[{ "node": "Responder ao Webhook", "type": "main", "index": 0 }]]
+    },
+    "Criar Agendamento na API": {
+      "main": [[{ "node": "Notificar por E-mail (Agendamento)", "type": "main", "index": 0 }]]
+    },
+    "Notificar por E-mail (Agendamento)": {
+      "main": [[{ "node": "Responder ao Webhook", "type": "main", "index": 0 }]]
+    },
+    "Cancelar Agendamento na API": {
+      "main": [[{ "node": "Notificar por E-mail (Cancelamento)", "type": "main", "index": 0 }]]
+    },
+    "Notificar por E-mail (Cancelamento)": {
+      "main": [[{ "node": "Responder ao Webhook", "type": "main", "index": 0 }]]
+    },
+    "Buscar Pagamentos na API": {
+      "main": [[{ "node": "Responder ao Webhook", "type": "main", "index": 0 }]]
+    },
+    "Buscar Paciente na API": {
+      "main": [[{ "node": "Responder ao Webhook", "type": "main", "index": 0 }]]
+    },
+    "Formatar Resposta Direta": {
+      "main": [[{ "node": "Responder ao Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "flow-b-v1",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "agendai"
+  },
+  "id": "flow-b-ai-core",
+  "tags": []
+}
