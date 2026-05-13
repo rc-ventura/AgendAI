@@ -1,5 +1,4 @@
 const express = require('express');
-const router = express.Router();
 
 const { createAgendamentosRepository } = require('../repositories/agendamentosRepository');
 const { createPacientesRepository } = require('../repositories/pacientesRepository');
@@ -8,6 +7,8 @@ const { createAgendamentosService } = require('../services/agendamentosService')
 const { createAgendamentosController } = require('../controllers/agendamentosController');
 
 function agendamentosRouter(db) {
+  const router = express.Router();
+
   const agendamentosRepo = createAgendamentosRepository(db);
   const pacientesRepo = createPacientesRepository(db);
   const horariosRepo = createHorariosRepository(db);
