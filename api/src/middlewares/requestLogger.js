@@ -1,3 +1,4 @@
+const { randomUUID } = require('crypto');
 const pino = require('pino');
 
 const logger = pino({
@@ -6,7 +7,7 @@ const logger = pino({
 
 function requestLogger(req, res, next) {
   const start = Date.now();
-  const correlationId = req.headers['x-request-id'] || crypto.randomUUID();
+  const correlationId = req.headers['x-request-id'] || randomUUID();
 
   req.correlationId = correlationId;
   res.setHeader('X-Request-ID', correlationId);
