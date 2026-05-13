@@ -238,7 +238,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "={{ $env.API_BASE_URL }}/horarios/disponiveis{{ $json.message.tool_calls[0].function.arguments ? '?data=' + JSON.parse($json.message.tool_calls[0].function.arguments).data : '' }}",
+        "url": "={{ $env.API_BASE_URL }}/horarios/disponiveis{{ $json.message.tool_calls[0].function.arguments && JSON.parse($json.message.tool_calls[0].function.arguments).data ? '?data=' + JSON.parse($json.message.tool_calls[0].function.arguments).data : '' }}",
         "options": {}
       },
       "id": "http-horarios",
