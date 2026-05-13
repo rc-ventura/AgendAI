@@ -64,10 +64,11 @@ function createAgendamentosService(db, { agendamentosRepo, pacientesRepo, horari
       agendamentosRepo.updateStatus(id, 'cancelado');
       horariosRepo.updateDisponivel(agendamento.horario_id, 1);
       cache.delByPrefix('horarios');
+      return agendamentosRepo.findById(id);
     });
 
-    transaction();
-    return { id: agendamento.id, status: 'cancelado' };
+    const row = transaction();
+    return formatAgendamento(row);
   }
 
   return { criarAgendamento, buscarAgendamento, cancelarAgendamento };

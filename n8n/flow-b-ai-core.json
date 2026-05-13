@@ -339,10 +339,10 @@
           "mappingMode": "defineBelow",
           "value": {
             "tipo": "cancelamento",
-            "paciente_email": "={{ $('Criar Agendamento na API').item.json.paciente.email }}",
-            "paciente_nome": "={{ $('Criar Agendamento na API').item.json.paciente.nome }}",
-            "medico_nome": "={{ $('Cancelar Agendamento na API').item.json.medico_nome ?? 'médico' }}",
-            "data_hora": "={{ $('Cancelar Agendamento na API').item.json.data_hora ?? '' }}"
+            "paciente_email": "={{ $('Cancelar Agendamento na API').item.json.paciente.email }}",
+            "paciente_nome": "={{ $('Cancelar Agendamento na API').item.json.paciente.nome }}",
+            "medico_nome": "={{ $('Cancelar Agendamento na API').item.json.medico.nome }}",
+            "data_hora": "={{ $('Cancelar Agendamento na API').item.json.horario.data_hora }}"
           },
           "schema": []
         },
