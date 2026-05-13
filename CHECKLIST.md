@@ -28,9 +28,12 @@ cd api && npm test
 |---|---|---|
 | horarios.test.js | 4 | ⬜ |
 | pacientes.test.js | 2 | ⬜ |
-| agendamentos.test.js | 7 | ⬜ |
+| agendamentos.test.js | 10 | ⬜ |
 | pagamentos.test.js | 3 | ⬜ |
-| **Total** | **19** | ⬜ |
+| cache.test.js | 3 | ⬜ |
+| concurrency.test.js | 1 | ⬜ |
+| validation.test.js | 11 | ⬜ |
+| **Total** | **34** | ⬜ |
 
 ---
 
