@@ -1,0 +1,273 @@
+{
+  "info": {
+    "_postman_id": "agendai-clinica-collection",
+    "name": "AgendAI — Clínica Saúde",
+    "description": "Coleção Postman para a API REST do AgendAI. Configure a variável BASE_URL antes de usar.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "BASE_URL",
+      "value": "http://localhost:3000",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Horários",
+      "item": [
+        {
+          "name": "GET /horarios/disponiveis",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/horarios/disponiveis",
+              "host": ["{{BASE_URL}}"],
+              "path": ["horarios", "disponiveis"]
+            },
+            "description": "Lista todos os horários disponíveis (disponivel=1). Resposta cacheada por 60s."
+          },
+          "response": [
+            {
+              "name": "200 OK — Lista de horários",
+              "originalRequest": {
+                "method": "GET",
+                "url": { "raw": "{{BASE_URL}}/horarios/disponiveis" }
+              },
+              "status": "OK",
+              "code": 200,
+              "body": "[{\"id\":3,\"data_hora\":\"2026-05-13T09:00:00\",\"disponivel\":1,\"medico\":{\"id\":1,\"nome\":\"Dr. Carlos Lima\",\"especialidade\":\"Clínico Geral\"}}]"
+            }
+          ]
+        },
+        {
+          "name": "GET /horarios/disponiveis?data=YYYY-MM-DD",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/horarios/disponiveis?data=2026-05-13",
+              "host": ["{{BASE_URL}}"],
+              "path": ["horarios", "disponiveis"],
+              "query": [{ "key": "data", "value": "2026-05-13" }]
+            },
+            "description": "Filtra horários por data específica (YYYY-MM-DD)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Agendamentos",
+      "item": [
+        {
+          "name": "POST /agendamentos",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"paciente_email\": \"pedro@email.com\",\n  \"horario_id\": 3\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{BASE_URL}}/agendamentos",
+              "host": ["{{BASE_URL}}"],
+              "path": ["agendamentos"]
+            },
+            "description": "Cria um agendamento. O paciente é identificado pelo e-mail cadastrado."
+          },
+          "response": [
+            {
+              "name": "201 Created",
+              "status": "Created",
+              "code": 201,
+              "body": "{\"id\":3,\"paciente\":{\"id\":3,\"nome\":\"Pedro Oliveira\",\"email\":\"pedro@email.com\"},\"horario\":{\"id\":3,\"data_hora\":\"2026-05-13T09:00:00\"},\"medico\":{\"nome\":\"Dr. Carlos Lima\"},\"status\":\"ativo\",\"criado_em\":\"2026-05-12T14:32:00\"}"
+            },
+            {
+              "name": "404 Paciente não encontrado",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\"error\":\"Paciente não encontrado\"}"
+            },
+            {
+              "name": "409 Horário indisponível",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\"error\":\"Horário não está mais disponível\"}"
+            }
+          ]
+        },
+        {
+          "name": "PATCH /agendamentos/:id/cancelar",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/agendamentos/1/cancelar",
+              "host": ["{{BASE_URL}}"],
+              "path": ["agendamentos", "1", "cancelar"]
+            },
+            "description": "Cancela um agendamento ativo. Define status='cancelado' e libera o horário."
+          },
+          "response": [
+            {
+              "name": "200 Cancelado",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"id\":1,\"status\":\"cancelado\"}"
+            },
+            {
+              "name": "404 Não encontrado",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\"error\":\"Agendamento não encontrado\"}"
+            },
+            {
+              "name": "400 Já cancelado",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\"error\":\"Agendamento já está cancelado\"}"
+            }
+          ]
+        },
+        {
+          "name": "GET /agendamentos/:id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/agendamentos/1",
+              "host": ["{{BASE_URL}}"],
+              "path": ["agendamentos", "1"]
+            },
+            "description": "Retorna detalhes de um agendamento específico."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Pacientes",
+      "item": [
+        {
+          "name": "GET /pacientes/:email",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/pacientes/joao@email.com",
+              "host": ["{{BASE_URL}}"],
+              "path": ["pacientes", "joao@email.com"]
+            },
+            "description": "Busca paciente pelo e-mail. Usado pelo LLM para validar o paciente antes do agendamento."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"id\":1,\"nome\":\"João Silva\",\"email\":\"joao@email.com\",\"telefone\":\"11999990001\"}"
+            },
+            {
+              "name": "404 Não encontrado",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\"error\":\"Paciente não encontrado\"}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Pagamentos",
+      "item": [
+        {
+          "name": "GET /pagamentos",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/pagamentos",
+              "host": ["{{BASE_URL}}"],
+              "path": ["pagamentos"]
+            },
+            "description": "Retorna tipos de consulta, valores e formas de pagamento aceitas."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "[{\"id\":1,\"descricao\":\"Consulta Geral\",\"valor\":150,\"formas\":[\"PIX\",\"Cartão de Débito\",\"Cartão de Crédito\",\"Dinheiro\"]}]"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Painel (Diferencial)",
+      "item": [
+        {
+          "name": "GET /painel",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/painel",
+              "host": ["{{BASE_URL}}"],
+              "path": ["painel"]
+            },
+            "description": "Painel HTML com todos os agendamentos. Abrir no navegador para melhor visualização."
+          }
+        }
+      ]
+    },
+    {
+      "name": "N8N Chat",
+      "item": [
+        {
+          "name": "POST /webhook/chat — Texto",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"text\",\n  \"text\": \"Quais os horários disponíveis para amanhã?\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "http://localhost:5678/webhook/chat",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "5678",
+              "path": ["webhook", "chat"]
+            },
+            "description": "Envia mensagem de texto para o N8N Chat Trigger."
+          }
+        },
+        {
+          "name": "POST /webhook/chat — Áudio",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "type", "value": "audio", "type": "text" },
+                { "key": "file", "type": "file", "src": "" }
+              ]
+            },
+            "url": {
+              "raw": "http://localhost:5678/webhook/chat",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "5678",
+              "path": ["webhook", "chat"]
+            },
+            "description": "Envia arquivo de áudio (.ogg, .mp3, .wav) para o N8N. Responde com arquivo .mp3."
+          }
+        }
+      ]
+    }
+  ]
+}

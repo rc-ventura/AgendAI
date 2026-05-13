@@ -1,0 +1,11 @@
+node_modules/
+.git/
+*.log
+.env
+coverage/
+*.md
+docs/
+specs/
+n8n/
+postman/
+data/
