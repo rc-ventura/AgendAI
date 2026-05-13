@@ -28,7 +28,10 @@ function createApp(db) {
     });
     next();
   });
-  app.use(limiter);
+  // Skip rate limiting in test env to prevent shared-counter leaks across test apps
+  if (process.env.NODE_ENV !== 'test') {
+    app.use(limiter);
+  }
   app.use(requestLogger);
 
   app.use('/horarios', horariosRouter(db));
