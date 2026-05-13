@@ -87,7 +87,7 @@ npm install
 npm test
 ```
 
-Esperado: 19 testes passando em 4 arquivos.
+Esperado: 34 testes passando em 7 suites.
 
 ## Uso
 
@@ -120,6 +120,9 @@ curl http://localhost:3000/pacientes/joao@email.com
 curl -X POST http://localhost:3000/agendamentos \
   -H "Content-Type: application/json" \
   -d '{"paciente_email":"pedro@email.com","horario_id":3}'
+
+# Buscar agendamento
+curl http://localhost:3000/agendamentos/1
 
 # Cancelar agendamento
 curl -X PATCH http://localhost:3000/agendamentos/1/cancelar
@@ -164,10 +167,12 @@ docker compose up --build -d
 
 ## Diferenciais Implementados
 
-- **Testes unitários** — Jest + Supertest (19 testes, 4 suites)
+- **Testes unitários** — Jest + Supertest (34 testes, 7 suites: rotas, cache, concorrência, validação)
+- **Arquitetura em camadas** — `routes → controllers → services → repositories` com injeção de dependência
 - **Function calling** — GPT-4o-mini com 5 funções mapeadas para endpoints REST
 - **Retry** — Gmail node (3x, 5s) e TTS HTTP Request (3x, 3s) no N8N
 - **Cache de disponibilidade** — TTL 60s com `node-cache`, invalidado em cada escrita
+- **Rate limiting** — 100 req/15 min por IP via `express-rate-limit`
 - **Painel HTML** — `GET /painel` com tabela colorida de agendamentos
 
 ## Troubleshooting

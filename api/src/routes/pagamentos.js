@@ -1,21 +1,16 @@
 const express = require('express');
 const router = express.Router();
 
+const { createPagamentosRepository } = require('../repositories/pagamentosRepository');
+const { createPagamentosService } = require('../services/pagamentosService');
+const { createPagamentosController } = require('../controllers/pagamentosController');
+
 function pagamentosRouter(db) {
-  router.get('/', (req, res, next) => {
-    try {
-      const rows = db.prepare('SELECT id, descricao, valor, formas FROM pagamentos').all();
-      const result = rows.map(r => ({
-        id: r.id,
-        descricao: r.descricao,
-        valor: r.valor,
-        formas: JSON.parse(r.formas),
-      }));
-      res.json(result);
-    } catch (err) {
-      next(err);
-    }
-  });
+  const pagamentosRepo = createPagamentosRepository(db);
+  const pagamentosService = createPagamentosService({ pagamentosRepo });
+  const controller = createPagamentosController({ pagamentosService });
+
+  router.get('/', controller.listar);
 
   return router;
 }

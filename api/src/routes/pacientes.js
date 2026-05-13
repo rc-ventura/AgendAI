@@ -1,19 +1,16 @@
 const express = require('express');
 const router = express.Router();
 
+const { createPacientesRepository } = require('../repositories/pacientesRepository');
+const { createPacientesService } = require('../services/pacientesService');
+const { createPacientesController } = require('../controllers/pacientesController');
+
 function pacientesRouter(db) {
-  router.get('/:email', (req, res, next) => {
-    try {
-      const { email } = req.params;
-      const paciente = db.prepare('SELECT id, nome, email, telefone FROM pacientes WHERE email = ?').get(email);
-      if (!paciente) {
-        return res.status(404).json({ error: 'Paciente não encontrado' });
-      }
-      res.json(paciente);
-    } catch (err) {
-      next(err);
-    }
-  });
+  const pacientesRepo = createPacientesRepository(db);
+  const pacientesService = createPacientesService({ pacientesRepo });
+  const controller = createPacientesController({ pacientesService });
+
+  router.get('/:email', controller.buscarPorEmail);
 
   return router;
 }
