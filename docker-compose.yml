@@ -11,6 +11,12 @@ services:
       - PORT=3000
       - DB_PATH=/app/data/clinica.db
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/horarios/disponiveis"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   n8n:
     image: n8nio/n8n
@@ -20,7 +26,13 @@ services:
       - ./n8n/data:/home/node/.n8n
     environment:
       - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=admin
-      - N8N_BASIC_AUTH_PASSWORD=admin
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:-admin}
       - WEBHOOK_URL=http://localhost:5678/
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s

@@ -1,4 +1,5 @@
 function seed(db) {
+  try {
   const count = db.prepare('SELECT COUNT(*) as n FROM medicos').get();
   if (count.n > 0) return;
 
@@ -51,6 +52,10 @@ function seed(db) {
   });
 
   seedAll();
+  } catch (error) {
+    console.error('Erro ao popular banco de dados:', error);
+    throw error;
+  }
 }
 
 module.exports = { seed };
