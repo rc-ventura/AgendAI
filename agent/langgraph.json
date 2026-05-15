@@ -3,5 +3,5 @@
   "graphs": {
     "agendai_agent": "./agent/graph.py:graph"
   },
-  "env": ".env"
+  "env": "../.env"
 }

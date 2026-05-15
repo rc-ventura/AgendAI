@@ -1,3 +1,4 @@
+import asyncio
 import os
 import smtplib
 from email.mime.text import MIMEText
@@ -61,7 +62,7 @@ async def send_email(state: AgendAIState) -> dict:
 
     subject, body = _build_message(payload)
     try:
-        _send_smtp(subject, body, payload["paciente_email"])
+        await asyncio.to_thread(_send_smtp, subject, body, payload["paciente_email"])
     except Exception as e:
         print(f"[email_sender] Failed after retries: {e}")
 

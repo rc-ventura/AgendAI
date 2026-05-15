@@ -42,12 +42,24 @@ export async function* streamChat(
     streamMode: "messages",
   });
 
+  let prevContent = "";
   for await (const chunk of stream) {
     if (chunk.event === "messages/partial") {
       const msgs = Array.isArray(chunk.data) ? chunk.data : [chunk.data];
       for (const msg of msgs) {
-        if (msg?.role === "assistant" && msg?.content) {
-          yield msg.content;
+        const isAI = msg?.type === "ai" || msg?.type === "AIMessageChunk" || msg?.role === "assistant";
+        if (!isAI) continue;
+        const raw = msg?.content;
+        if (!raw) continue;
+        const fullText = typeof raw === "string"
+          ? raw
+          : Array.isArray(raw)
+            ? raw.map((p: unknown) => (typeof p === "string" ? p : (p as { text?: string })?.text ?? "")).join("")
+            : "";
+        const delta = fullText.slice(prevContent.length);
+        if (delta) {
+          prevContent = fullText;
+          yield delta;
         }
       }
     }

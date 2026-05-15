@@ -8,7 +8,8 @@ openai_client = AsyncOpenAI()
 
 
 async def transcribe_audio(state: AgendAIState) -> dict:
-    audio_bytes = state["audio_data"]
+    raw = state["audio_data"]
+    audio_bytes = bytes(raw) if isinstance(raw, list) else raw
     audio_file = io.BytesIO(audio_bytes)
     audio_file.name = "audio.mp3"
 
