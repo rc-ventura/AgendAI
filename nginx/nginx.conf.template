@@ -23,8 +23,18 @@ server {
             return 204;
         }
 
-        # Auth via x-api-key (header usado pelo @langchain/langgraph-sdk)
-        if ($http_x_api_key != "${LANGGRAPH_AUTH_TOKEN}") {
+        # Auth via x-api-key (header usado pelo @langchain/langgraph-sdk).
+        # Falha fechado: se LANGGRAPH_AUTH_TOKEN não estiver definido no
+        # ambiente, retorna 500 (misconfig do servidor) em vez de aceitar
+        # silenciosamente qualquer request sem header.
+        set $expected_token "${LANGGRAPH_AUTH_TOKEN}";
+        if ($expected_token = "") {
+            return 500 '{"error":"LANGGRAPH_AUTH_TOKEN not configured"}';
+        }
+        if ($http_x_api_key = "") {
+            return 401 '{"error":"Unauthorized"}';
+        }
+        if ($http_x_api_key != $expected_token) {
             return 401 '{"error":"Unauthorized"}';
         }
 
