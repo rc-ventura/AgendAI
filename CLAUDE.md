@@ -10,12 +10,13 @@ at specs/002-langgraph-orchestration/plan.md
 
 ## Project Overview
 
-AgendAI is a medical scheduling automation system consisting of two independent components:
+AgendAI is a medical scheduling automation system consisting of three independent components:
 
 1. **REST API** (`api/`) — Node.js 20 + Express 4 + SQLite (`better-sqlite3`) that manages doctors, patients, time slots, appointments, and (mock) payments.
-2. **N8N Workflows** (`n8n/`) — 4 exported JSON flows that handle the chat interface: routing (flow-a), GPT-4o-mini with function calling (flow-b), audio via Whisper/TTS (flow-c), and Gmail transactional email (flow-d).
+2. **LangGraph Agent** (`agent/`) — Python 3.11 + LangGraph v1.0+ StateGraph that handles the chat interface: input routing, GPT-4o-mini with tool calling, Whisper/TTS audio pipeline, and Gmail SMTP transactional email.
+3. **Chat UI** (`agent-ui/`) — Next.js 14 frontend using `@langchain/langgraph-sdk` to stream conversations with the agent.
 
-Everything starts with a single `docker compose up --build -d`. The API runs on port 3000; N8N on port 5678.
+Everything starts with a single `docker compose up --build -d`. The API runs on port 3000; the LangGraph agent on port 8123 (via nginx proxy on 8080); the chat UI on port 3001.
 
 ## Commands
 
@@ -67,16 +68,19 @@ routes/ → controllers/ → services/ → repositories/ → better-sqlite3
 - **`middlewares/errorHandler.js`** — centralized error handler; maps known error types to HTTP status codes.
 - **`app.js`** — `createApp(db)` factory (enables in-memory DB injection for tests). Applies rate limiting (100 req/15 min), 30 s request timeout, and request logger before routing.
 
-### N8N Flows
+### LangGraph Agent
 
-Import order matters (sub-workflows must exist before callers reference their IDs):
+The agent is a `StateGraph` compiled in `agent/agent/graph.py`. Nodes live in `agent/agent/nodes/`:
 
-1. `flow-d-email.json` — Gmail sub-workflow
-2. `flow-b-ai-core.json` — LLM core (references flow-d ID)
-3. `flow-a-entrada.json` — webhook entry (references flow-b and flow-c IDs)
-4. `flow-c-audio.json` — audio pipeline (Whisper → flow-b → TTS)
+- `input_detector.py` — routes text vs. audio
+- `transcriber.py` — Whisper STT for audio input
+- `llm_core.py` — GPT-4o-mini with the system prompt and tool bindings
+- `tools.py` — 6 `@tool`-decorated async functions that call the REST API via `api_client.py`
+- `tool_result_processor.py` — inspects the latest tool round to detect successful create/cancel appointment calls and prepares the email payload
+- `email_sender.py` — Gmail SMTP with `tenacity` retry
+- `tts.py` — OpenAI TTS (voice `alloy`) for audio output
 
-After import, update `API_BASE_URL` in HTTP Request nodes to `http://api:3000` and wire OpenAI/Gmail credentials.
+The compiled `graph` is exposed via LangGraph Platform (`langgraph dev`) on port 8123. Configure `OPENAI_API_KEY`, `API_BASE_URL`, optional `LANGCHAIN_*` (LangSmith), and optional `GMAIL_USER` / `GMAIL_APP_PASSWORD` via `.env`.
 
 ### Database
 
@@ -90,8 +94,9 @@ Tests create an in-memory DB, run schema + seed, pass the `db` to `createApp(db)
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `OPENAI_API_KEY` | — | Required for N8N GPT-4o-mini / Whisper / TTS |
+| `OPENAI_API_KEY` | — | Required by the LangGraph agent for GPT-4o-mini / Whisper / TTS |
 | `PORT` | `3000` | API listen port |
 | `DB_PATH` | `/app/data/clinica.db` | SQLite file path |
-| `N8N_BASIC_AUTH_USER` | `admin` | N8N UI login |
-| `N8N_BASIC_AUTH_PASSWORD` | `admin` | N8N UI login |
+| `API_BASE_URL` | `http://api:3000` | URL used by the agent to call the REST API |
+| `LANGGRAPH_AUTH_TOKEN` | — | Token enforced by the nginx proxy in front of the agent (port 8080) |
+| `GMAIL_USER` / `GMAIL_APP_PASSWORD` | — | Optional Gmail SMTP credentials for notifications |

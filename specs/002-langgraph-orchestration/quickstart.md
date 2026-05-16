@@ -48,9 +48,8 @@ Serviços disponíveis:
 |---------|-----|-----------|
 | API REST | http://localhost:3000 | Backend médico (Node.js + SQLite) |
 | Chat UI | http://localhost:3001 | Interface de chat do paciente |
-| LangGraph Server | http://localhost:8123 | API do agente |
+| LangGraph Server | http://localhost:8080 | API do agente (via proxy nginx) |
 | Painel | http://localhost:3000/painel | Dashboard HTML de agendamentos |
-| N8N | http://localhost:5678 | Mantido no compose (credenciais: admin/admin) |
 
 ---
 
@@ -196,8 +195,8 @@ AgendAI/
 │   │   ├── lib/langgraph.ts    # SDK wrapper
 │   │   └── tests/              # Vitest + MSW
 │   └── Dockerfile
-├── n8n/                        # Flows exportados (legado)
-├── docker-compose.yml          # api + agent + agent-ui + n8n
+├── nginx/                      # Reverse proxy + auth para o LangGraph server
+├── docker-compose.yml          # api + agent + agent-ui + nginx
 ├── .env.example
 └── README.md
 ```

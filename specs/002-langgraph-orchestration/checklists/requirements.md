@@ -33,4 +33,4 @@
 
 - Spec aprovada na primeira iteração de validação
 - Todos os 6 fluxos do desafio técnico cobertos (consulta, agendamento, cancelamento, áudio, pagamento, observabilidade)
-- Assumptions claramente documentados: API REST inalterada, N8N permanece inativo, LangSmith via variáveis de ambiente
+- Assumptions claramente documentados: API REST inalterada, N8N totalmente substituído pelo agente LangGraph (removido do Docker Compose), LangSmith via variáveis de ambiente

@@ -40,7 +40,7 @@ cd api && npm test
 |---|---|---|
 | Código da API | `api/` | ✅ |
 | Banco de dados com dados iniciais | `api/src/db/seed.js` | ✅ |
-| Export dos fluxos N8N | `n8n/*.json` | ✅ |
+| Agente LangGraph | `agent/agent/graph.py` + `agent/agent/nodes/` | ✅ |
 | Instruções de execução | `README.md` | ✅ |
 | Coleção Postman | `postman/clinica.collection.json` | ✅ |
 | Vídeo/GIF demonstrativo | `docs/demo.gif` | ⬜ |
@@ -59,7 +59,7 @@ Adicionar prints em `docs/prints/` após execução:
 - [ ] `docs/prints/05-email-cancelamento.png` — e-mail de cancelamento
 - [ ] `docs/prints/06-resposta-audio.png` — chat de áudio respondido
 - [ ] `docs/prints/07-painel-html.png` — painel em http://localhost:3000/painel
-- [ ] `docs/prints/08-n8n-flows-ativos.png` — 4 workflows ativos no N8N
+- [ ] `docs/prints/08-langgraph-studio.png` — grafo executando no LangGraph Studio
 - [ ] `docs/prints/09-testes-unitarios.png` — npm test todos passando
 
 ---

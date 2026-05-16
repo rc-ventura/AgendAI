@@ -156,7 +156,7 @@
 
 **Propósito**: Integração completa, docker-compose validado, documentação
 
-- [X] T058 [P] Validar `docker compose up --build -d` sobe todos os serviços sem erro: `api`, `n8n`, `agent`, `agent-ui`
+- [X] T058 [P] Validar `docker compose up --build -d` sobe todos os serviços sem erro: `api`, `agent`, `nginx`, `agent-ui`
 - [X] T059 [P] Atualizar `README.md` — adicionar seção LangGraph: pré-requisitos, variáveis de ambiente, como usar o Agent UI, como acessar LangSmith
 - [X] T060 [P] Atualizar `quickstart.md` em `specs/002-langgraph-orchestration/quickstart.md` — confirmar comandos e URLs após implementação
 - [X] T061 Executar suite de testes completa: `cd agent && pytest tests/ -v --tb=short` — 28/28 testes passando
@@ -235,4 +235,4 @@ T058 docker validate  |  T059 README  |  T063 ADR
 - `openai` sempre mockado com `AsyncMock` nos testes — nunca consome créditos em testes
 - Commitar após cada task ou grupo lógico
 - Parar em qualquer checkpoint para validar a user story independentemente
-- N8N permanece no `docker-compose.yml` mas sem fluxos ativos — não remover
+- N8N foi removido do `docker-compose.yml` — substituído integralmente pelo agente LangGraph (`agent/`) e pelo proxy `nginx/`

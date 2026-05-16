@@ -9,7 +9,6 @@ Sistema de agendamento médico automatizado com LangGraph v1.0+, GPT-4o-mini, AP
 | API REST | Node.js 20 + Express 4 + SQLite | 3000 |
 | Agente LangGraph | Python 3.11 + LangGraph v1.0+ | 8123 |
 | Chat UI | Next.js 14 + @langchain/langgraph-sdk | 3001 |
-| Orquestração legada | N8N self-hosted (Docker) | 5678 |
 | LLM | GPT-4o-mini (tool calling) | — |
 | STT | OpenAI Whisper (whisper-1) | — |
 | TTS | OpenAI TTS (tts-1, voz alloy) | — |
@@ -78,32 +77,7 @@ Após o build completo, acesse o chat em **http://localhost:3001**.
 | Valores/pagamento | "Quanto custa a consulta?" | Preço em R$ + formas aceitas |
 | Áudio | Clique 🎙 ou 📎 e envie um `.mp3` | Resposta do agente em texto |
 
-### 4. Configurar Credenciais no N8N (legado)
-
-1. Acessar `http://localhost:5678` — criar conta admin/admin
-2. **Settings → Credentials → New → OpenAI API**
-   - Inserir `OPENAI_API_KEY`
-3. **Settings → Credentials → New → Gmail OAuth2 API**
-   - Seguir fluxo OAuth2 (ver `docs/prints/gmail-setup/`)
-   - Escopo necessário: `https://www.googleapis.com/auth/gmail.send`
-
-### 4. Importar os Fluxos N8N
-
-Importar **nesta ordem** (Menu → Import from file):
-
-1. `n8n/flow-d-email.json`
-2. `n8n/flow-b-ai-core.json`
-3. `n8n/flow-a-entrada.json`
-4. `n8n/flow-c-audio.json`
-
-Após importar cada flow:
-- Associar as credenciais OpenAI e Gmail nos nodes correspondentes
-- Verificar que `API_BASE_URL` nos nodes HTTP Request aponta para `http://api:3000`
-- No flow-a: atualizar os IDs dos workflows de flow-b e flow-c nos nodes "Execute Workflow"
-- No flow-b: atualizar o ID do flow-d no node "Execute Workflow"
-- **Ativar** cada workflow (toggle no canto superior direito)
-
-### 5. Rodar Testes
+### 4. Rodar Testes
 
 **Agente Python** (28 testes — nodes, tools, grafo):
 ```bash
@@ -129,21 +103,9 @@ npm test
 
 ## Uso
 
-### Chat via curl
+### Chat via UI
 
-**Texto**:
-```bash
-curl -X POST http://localhost:5678/webhook/chat \
-  -H "Content-Type: application/json" \
-  -d '{"type":"text","text":"Quais horários disponíveis para amanhã?"}'
-```
-
-**Áudio**:
-```bash
-curl -X POST http://localhost:5678/webhook/chat \
-  -F "type=audio" \
-  -F "file=@sample.ogg"
-```
+Acesse `http://localhost:3001` — a UI conecta diretamente ao LangGraph server (via proxy nginx em `:8080`). Para chamadas programáticas use o SDK `@langchain/langgraph-sdk` (ver `agent-ui/src/lib/langgraph.ts`).
 
 ### API direta
 
@@ -172,14 +134,16 @@ curl http://localhost:3000/pagamentos
 open http://localhost:3000/painel
 ```
 
-## Fluxos N8N
+## Nós do Grafo LangGraph
 
-| Flow | Arquivo | Função |
+| Nó | Arquivo | Função |
 |---|---|---|
-| A — Entrada | `flow-a-entrada.json` | Webhook `/chat`, detecta texto ou áudio e roteia |
-| B — IA Core | `flow-b-ai-core.json` | GPT-4o-mini + function calling + HTTP para API |
-| C — Áudio | `flow-c-audio.json` | Whisper → Flow B → TTS (voz alloy) |
-| D — E-mail | `flow-d-email.json` | Sub-workflow Gmail (reutilizado por B e C) |
+| `detect_input_type` | `agent/agent/nodes/input_detector.py` | Roteia texto vs. áudio |
+| `transcribe_audio` | `agent/agent/nodes/transcriber.py` | Whisper STT |
+| `chat_with_llm` + `execute_tools` | `agent/agent/nodes/llm_core.py` + `tools.py` | GPT-4o-mini + tool calling + HTTP para API |
+| `process_tool_results` | `agent/agent/nodes/tool_result_processor.py` | Detecta sucesso de criar/cancelar agendamento e prepara payload de e-mail |
+| `send_email` | `agent/agent/nodes/email_sender.py` | Gmail SMTP (retry via tenacity) |
+| `synthesize_tts` | `agent/agent/nodes/tts.py` | OpenAI TTS (voz alloy) |
 
 ## Banco de Dados
 
@@ -208,7 +172,7 @@ docker compose up --build -d
 - **Testes unitários** — Jest + Supertest (34 testes, 7 suites: rotas, cache, concorrência, validação)
 - **Arquitetura em camadas** — `routes → controllers → services → repositories` com injeção de dependência
 - **Function calling** — GPT-4o-mini com 5 funções mapeadas para endpoints REST
-- **Retry** — Gmail node (3x, 5s) e TTS HTTP Request (3x, 3s) no N8N
+- **Retry** — Gmail SMTP (3x, backoff exponencial) e OpenAI TTS (3x) via `tenacity` no agente LangGraph
 - **Cache de disponibilidade** — TTL 60s com `node-cache`, invalidado em cada escrita
 - **Rate limiting** — 100 req/15 min por IP via `express-rate-limit`
 - **Painel HTML** — `GET /painel` com tabela colorida de agendamentos
@@ -293,7 +257,6 @@ Esperado: 28 testes passando (state, api_client, nodes, graph).
 | Sintoma | Causa | Solução |
 |---|---|---|
 | `connection refused` em `/horarios` | Container API não iniciou | `docker compose logs api` |
-| Flow N8N não responde | Workflow não ativado | Ativar toggle no N8N UI |
 | Agente não responde em :8123 | Container agent falhou | `docker compose logs agent` |
 | E-mails não chegam (agente) | GMAIL_USER/APP_PASSWORD não configurados | Ver seção Gmail acima |
 | Resposta de áudio é texto | TTS falhou | Verificar `OPENAI_API_KEY` e logs do agente |

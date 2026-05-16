@@ -179,6 +179,6 @@ O paciente pergunta quanto custa a consulta ou quais formas de pagamento são ac
 - O serviço LangGraph roda como um container Docker adicional no `docker-compose.yml` existente
 - As credenciais do Gmail (OAuth2) precisam ser reconfiguradas no novo serviço — o N8N não é mais responsável pelo envio
 - O LangSmith requer `LANGCHAIN_API_KEY`, `LANGCHAIN_TRACING_V2=true` e `LANGCHAIN_PROJECT=AgendAI` nas variáveis de ambiente
-- N8N permanece instalado no Docker Compose para não quebrar o ambiente existente, mas os fluxos ficam inativos
+- N8N foi totalmente substituído pelo agente LangGraph e removido do Docker Compose — os flows JSON antigos em `n8n/` permanecem apenas como referência histórica/legado
 - Histórico de conversa é mantido em memória por sessão (sem persistência entre reinicializações do container)
 - A versão do LangGraph utilizada é ≥ 1.0 (API estável com `StateGraph`, `ToolNode`, e suporte a streaming)

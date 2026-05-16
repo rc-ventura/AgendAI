@@ -6,6 +6,5 @@ coverage/
 *.md
 docs/
 specs/
-n8n/
 postman/
 data/
