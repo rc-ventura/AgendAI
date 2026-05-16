@@ -39,6 +39,7 @@ que invalidariam a decisão.
 | [ADR-007](./ADR-007-openai-tts.md) | OpenAI TTS para síntese de voz | 📝 Referenciado, não documentado | [001](../../specs/001-n8n-medical-scheduling/) |
 | ADR-011 | Caminho evolutivo para MCP (pendente — T063) | ⏳ Planejado | [002](../../specs/002-langgraph-orchestration/) |
 | [ADR-012](./ADR-012-apiclient-singleton-async.md) | `ApiClient` como singleton de módulo sob asyncio | ✅ Accepted | [002](../../specs/002-langgraph-orchestration/) |
+| [ADR-013](./ADR-013-langgraph-dev-server.md) | `langgraph dev` como servidor do agente (MVP) | ✅ Accepted | [002](../../specs/002-langgraph-orchestration/) |
 
 > **Nota**: ADRs marcados como "Referenciado, não documentado" foram citados em outros documentos do projeto (`docs/initial_plan.md`, `specs/001-n8n-medical-scheduling/research.md`) mas ainda não têm arquivo dedicado. Tarefa de documentação retroativa pendente.
 
