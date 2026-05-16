@@ -40,6 +40,13 @@ def mock_api_client():
             "medico": {"nome": "Dr. Carlos Lima"},
             "criado_em": "2026-05-14T10:00:00",
         }))
+        mock.get("/agendamentos/1").mock(return_value=httpx.Response(200, json={
+            "id": 1, "status": "ativo",
+            "paciente": {"id": 1, "nome": "João Silva", "email": "joao@email.com"},
+            "horario": {"id": 1, "data_hora": "2026-05-20T09:00:00"},
+            "medico": {"nome": "Dr. Carlos Lima"},
+            "criado_em": "2026-05-14T10:00:00",
+        }))
         mock.patch("/agendamentos/1/cancelar").mock(return_value=httpx.Response(200, json={
             "id": 1, "status": "cancelado"
         }))

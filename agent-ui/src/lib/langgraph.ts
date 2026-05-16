@@ -1,10 +1,11 @@
 import { Client } from "@langchain/langgraph-sdk";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8123";
+const apiKey = process.env.NEXT_PUBLIC_LANGGRAPH_API_KEY;
 export const graphId = process.env.NEXT_PUBLIC_GRAPH_ID ?? "agendai_agent";
 
 export function createClient() {
-  return new Client({ apiUrl });
+  return new Client({ apiUrl, apiKey });
 }
 
 export interface ChatMessage {

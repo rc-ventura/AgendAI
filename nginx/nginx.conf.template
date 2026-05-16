@@ -1,0 +1,46 @@
+limit_req_zone $binary_remote_addr zone=agent_limit:10m rate=20r/m;
+
+server {
+    listen 8080;
+    server_name _;
+
+    # SSE / streaming
+    proxy_buffering           off;
+    proxy_cache               off;
+    proxy_http_version        1.1;
+    proxy_set_header          Connection "";
+    proxy_set_header          Host $host;
+    proxy_set_header          X-Real-IP $remote_addr;
+    proxy_read_timeout        300s;
+    chunked_transfer_encoding on;
+
+    location / {
+        # Preflight OPTIONS — responde sem chamar o agent
+        if ($request_method = OPTIONS) {
+            add_header Access-Control-Allow-Origin  "http://localhost:3001";
+            add_header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS";
+            add_header Access-Control-Allow-Headers "Content-Type, x-api-key, Authorization";
+            return 204;
+        }
+
+        # Auth via x-api-key (header usado pelo @langchain/langgraph-sdk)
+        if ($http_x_api_key != "${LANGGRAPH_AUTH_TOKEN}") {
+            return 401 '{"error":"Unauthorized"}';
+        }
+
+        # Rate limiting: 20 req/min, burst de 10 sem delay
+        limit_req        zone=agent_limit burst=10 nodelay;
+        limit_req_status 429;
+
+        # Remove CORS headers do upstream para evitar duplicação
+        proxy_hide_header Access-Control-Allow-Origin;
+        proxy_hide_header Access-Control-Allow-Methods;
+        proxy_hide_header Access-Control-Allow-Headers;
+
+        add_header Access-Control-Allow-Origin  "http://localhost:3001" always;
+        add_header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS" always;
+        add_header Access-Control-Allow-Headers "Content-Type, x-api-key, Authorization" always;
+
+        proxy_pass http://agent:8123;
+    }
+}

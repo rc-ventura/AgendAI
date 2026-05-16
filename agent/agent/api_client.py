@@ -33,6 +33,19 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
+    async def listar_agendamentos_paciente(self, email: str, status: str | None = None) -> list[dict]:
+        params = {"email": email}
+        if status:
+            params["status"] = status
+        r = await self._client.get("/agendamentos", params=params)
+        r.raise_for_status()
+        return r.json()
+
+    async def buscar_agendamento(self, agendamento_id: int) -> dict:
+        r = await self._client.get(f"/agendamentos/{agendamento_id}")
+        r.raise_for_status()
+        return r.json()
+
     async def buscar_pagamentos(self) -> list[dict]:
         r = await self._client.get("/pagamentos")
         r.raise_for_status()

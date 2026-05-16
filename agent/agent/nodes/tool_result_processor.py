@@ -10,69 +10,82 @@ from agent.state import AgendAIState
 _EMAIL_TOOLS = {"criar_agendamento", "cancelar_agendamento"}
 
 
-def _find_last_tool_call_name(state: AgendAIState) -> str | None:
+def _find_last_email_tool_call(state: AgendAIState) -> tuple[str, str] | tuple[None, None]:
+    """Returns (tool_name, tool_call_id) for the most recent email-triggering tool call."""
     for msg in reversed(state["messages"]):
         if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
-            return msg.tool_calls[0].get("name")
+            for tc in msg.tool_calls:
+                if tc.get("name") in _EMAIL_TOOLS:
+                    return tc["name"], tc["id"]
+    return None, None
+
+
+def _get_tool_message(state: AgendAIState, tool_call_id: str) -> ToolMessage | None:
+    """Finds the ToolMessage that matches a given tool_call_id."""
+    for msg in state["messages"]:
+        if isinstance(msg, ToolMessage) and msg.tool_call_id == tool_call_id:
+            return msg
     return None
 
 
-def _build_email_payload(state: AgendAIState, tool_name: str) -> dict | None:
-    # Find the last ToolMessage result
+def _get_payment_tool_message(state: AgendAIState) -> ToolMessage | None:
+    """Finds the most recent ToolMessage from buscar_pagamentos, if any."""
     for msg in reversed(state["messages"]):
         if not isinstance(msg, ToolMessage):
             continue
-        # Parse agendamento result from criar_agendamento tool output
-        if tool_name == "criar_agendamento":
-            return {
-                "tipo": "agendamento",
-                "paciente_email": _extract_field(state, "paciente_email"),
-                "paciente_nome": _extract_field(state, "paciente_nome") or "Paciente",
-                "medico_nome": _extract_field(state, "medico_nome") or "Médico",
-                "data_hora": _extract_field(state, "data_hora") or "",
-                "valor": _extract_field(state, "valor"),
-                "formas_pagamento": _extract_field(state, "formas_pagamento"),
-            }
-        if tool_name == "cancelar_agendamento":
-            return {
-                "tipo": "cancelamento",
-                "paciente_email": _extract_field(state, "paciente_email") or "",
-                "paciente_nome": _extract_field(state, "paciente_nome") or "Paciente",
-                "medico_nome": _extract_field(state, "medico_nome") or "Médico",
-                "data_hora": _extract_field(state, "data_hora") or "",
-                "valor": None,
-                "formas_pagamento": None,
-            }
+        try:
+            data = json.loads(msg.content)
+            if "formas_pagamento" in data and "valor" in data:
+                return msg
+        except (json.JSONDecodeError, TypeError):
+            pass
     return None
 
 
-def _extract_field(state: AgendAIState, field: str):
-    """Best-effort extraction of contextual data from tool messages content."""
-    for msg in reversed(state["messages"]):
-        if isinstance(msg, ToolMessage):
-            content = msg.content or ""
-            # Simple heuristic: look for structured data in content
-            if field == "paciente_email" and "@" in content:
-                import re
-                match = re.search(r"[\w.+-]+@[\w-]+\.[a-z]{2,}", content)
-                if match:
-                    return match.group(0)
-            if field == "data_hora":
-                import re
-                match = re.search(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}", content)
-                if match:
-                    return match.group(0).replace("T", " ")
-            if field == "medico_nome" and "Dr." in content:
-                import re
-                match = re.search(r"Dr\.?\s+[\w\s]+", content)
-                if match:
-                    return match.group(0).strip()
-    return None
+def _parse_json(msg: ToolMessage) -> dict:
+    try:
+        return json.loads(msg.content)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+def _build_email_payload(tool_name: str, tool_data: dict, payment_data: dict | None) -> dict:
+    if tool_name == "criar_agendamento":
+        return {
+            "tipo": "agendamento",
+            "paciente_email": tool_data.get("paciente_email", ""),
+            "paciente_nome": tool_data.get("paciente_nome") or "Paciente",
+            "medico_nome": tool_data.get("medico_nome") or "Médico",
+            "data_hora": tool_data.get("data_hora", ""),
+            "valor": payment_data.get("valor") if payment_data else None,
+            "formas_pagamento": payment_data.get("formas_pagamento") if payment_data else None,
+        }
+    return {
+        "tipo": "cancelamento",
+        "paciente_email": tool_data.get("paciente_email", ""),
+        "paciente_nome": tool_data.get("paciente_nome") or "Paciente",
+        "medico_nome": tool_data.get("medico_nome") or "Médico",
+        "data_hora": tool_data.get("data_hora", ""),
+        "valor": None,
+        "formas_pagamento": None,
+    }
 
 
 def process_tool_results(state: AgendAIState) -> dict:
-    tool_name = _find_last_tool_call_name(state)
-    if tool_name in _EMAIL_TOOLS:
-        payload = _build_email_payload(state, tool_name)
-        return {"email_pending": True, "email_payload": payload}
-    return {}
+    tool_name, tool_call_id = _find_last_email_tool_call(state)
+    if tool_name is None:
+        return {}
+
+    tool_msg = _get_tool_message(state, tool_call_id)
+    if tool_msg is None:
+        return {}
+
+    tool_data = _parse_json(tool_msg)
+    if not tool_data.get("sucesso"):
+        return {}
+
+    payment_msg = _get_payment_tool_message(state) if tool_name == "criar_agendamento" else None
+    payment_data = _parse_json(payment_msg) if payment_msg else None
+
+    payload = _build_email_payload(tool_name, tool_data, payment_data)
+    return {"email_pending": True, "email_payload": payload}

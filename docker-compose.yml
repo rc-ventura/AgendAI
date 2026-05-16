@@ -23,25 +23,40 @@ services:
   agent:
     build: ./agent
     ports:
-      - "8123:8123"
+      - "127.0.0.1:8123:8123"  # só localhost — LangGraph Studio; externo usa nginx:8080
     env_file: .env
     environment:
       - API_BASE_URL=http://api:3000
+      - LANGGRAPH_AUTH_TOKEN=${LANGGRAPH_AUTH_TOKEN}
     depends_on:
       - api
     restart: unless-stopped
     networks:
       - agendai-network
 
-  agent-ui:
-    build: ./agent-ui
+  nginx:
+    build: ./nginx
     ports:
-      - "3001:3001"
+      - "8080:8080"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8123
-      - NEXT_PUBLIC_GRAPH_ID=agendai_agent
+      - LANGGRAPH_AUTH_TOKEN=${LANGGRAPH_AUTH_TOKEN}
     depends_on:
       - agent
+    restart: unless-stopped
+    networks:
+      - agendai-network
+
+  agent-ui:
+    build:
+      context: ./agent-ui
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8080
+        NEXT_PUBLIC_GRAPH_ID: agendai_agent
+        NEXT_PUBLIC_LANGGRAPH_API_KEY: ${LANGGRAPH_AUTH_TOKEN}
+    ports:
+      - "3001:3001"
+    depends_on:
+      - nginx
     restart: unless-stopped
     networks:
       - agendai-network

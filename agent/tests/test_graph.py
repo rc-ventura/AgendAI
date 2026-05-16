@@ -29,7 +29,7 @@ async def test_text_query_reaches_llm(mock_api_client):
     with patch("agent.nodes.llm_core.llm") as mock_llm:
         mock_llm.ainvoke = AsyncMock(return_value=mock_ai_response)
         state = make_state(messages=[HumanMessage(content="Quais horários?")])
-        result = await graph.ainvoke(state)
+        result = await graph.ainvoke(state, config={"configurable": {"thread_id": "test-1"}})
 
     assert result["input_type"] == "text"
     last_msg = result["messages"][-1]
@@ -63,7 +63,7 @@ async def test_email_pending_triggers_send_email(mock_api_client):
                 "formas_pagamento": ["PIX"],
             },
         )
-        result = await graph.ainvoke(state)
+        result = await graph.ainvoke(state, config={"configurable": {"thread_id": "test-2"}})
 
     assert result["email_pending"] is False
 
@@ -93,7 +93,7 @@ async def test_audio_path_calls_transcriber_and_tts():
             input_type="audio",
             audio_data=b"FAKE_AUDIO_INPUT",
         )
-        result = await graph.ainvoke(state)
+        result = await graph.ainvoke(state, config={"configurable": {"thread_id": "test-3"}})
 
     assert result["input_type"] == "audio"
     assert result["final_response"] == fake_audio_out
@@ -110,7 +110,11 @@ async def test_run_id_present_for_langsmith():
     with patch("agent.nodes.llm_core.llm") as mock_llm:
         mock_llm.ainvoke = AsyncMock(return_value=mock_ai_response)
         state = make_state(messages=[HumanMessage(content="Oi")])
-        config = RunnableConfig(run_name="test_langsmith_trace", tags=["test"])
+        config = RunnableConfig(
+            run_name="test_langsmith_trace",
+            tags=["test"],
+            configurable={"thread_id": "test-4"},
+        )
         result = await graph.ainvoke(state, config=config)
 
     assert result is not None

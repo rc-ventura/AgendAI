@@ -80,6 +80,49 @@ describe('GET /agendamentos/:id', () => {
   });
 });
 
+describe('GET /agendamentos', () => {
+  it('retorna agendamentos do paciente pelo email — retorna 200 com lista', async () => {
+    const res = await request(app).get('/agendamentos?email=joao@email.com');
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body.length).toBeGreaterThan(0);
+    expect(res.body[0]).toHaveProperty('paciente');
+    expect(res.body[0]).toHaveProperty('horario');
+    expect(res.body[0]).toHaveProperty('medico');
+    expect(res.body[0].paciente).toHaveProperty('email', 'joao@email.com');
+  });
+
+  it('filtra por status quando parâmetro status é fornecido', async () => {
+    const res = await request(app).get('/agendamentos?email=joao@email.com&status=ativo');
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    res.body.forEach(a => expect(a.status).toBe('ativo'));
+  });
+
+  it('retorna lista vazia para paciente sem agendamentos', async () => {
+    const res = await request(app).get('/agendamentos?email=lucas@email.com');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
+  it('retorna 400 quando email está ausente', async () => {
+    const res = await request(app).get('/agendamentos');
+
+    expect(res.status).toBe(400);
+    expect(res.body).toHaveProperty('error');
+  });
+
+  it('retorna 400 para email inválido', async () => {
+    const res = await request(app).get('/agendamentos?email=nao-e-email');
+
+    expect(res.status).toBe(400);
+    expect(res.body).toHaveProperty('error');
+  });
+});
+
 describe('PATCH /agendamentos/:id/cancelar', () => {
   it('cancela agendamento ativo — retorna 200 com status cancelado', async () => {
     const agendamento = db.prepare("SELECT id FROM agendamentos WHERE status='ativo' LIMIT 1").get();

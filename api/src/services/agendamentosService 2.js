@@ -70,12 +70,7 @@ function createAgendamentosService(db, { agendamentosRepo, pacientesRepo, horari
     return { id: agendamento.id, status: 'cancelado' };
   }
 
-  function listarAgendamentosPaciente(email, status = null) {
-    const rows = agendamentosRepo.findByPacienteEmail(email, status);
-    return rows.map(formatAgendamento);
-  }
-
-  return { criarAgendamento, buscarAgendamento, cancelarAgendamento, listarAgendamentosPaciente };
+  return { criarAgendamento, buscarAgendamento, cancelarAgendamento };
 }
 
 module.exports = { createAgendamentosService };
