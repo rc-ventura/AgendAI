@@ -43,7 +43,12 @@ export async function* streamChat(
     streamMode: "messages",
   });
 
-  let prevContent = "";
+  // Track accumulated content PER message id so that a new AIMessage
+  // (e.g. after a tool round, or when the LLM emits text + tool_call in one
+  // message and then a separate final answer) does not get its initial
+  // characters silently truncated by a stale prevContent from a previous
+  // message.
+  const seen = new Map<string, string>();
   for await (const chunk of stream) {
     if (chunk.event === "messages/partial") {
       const msgs = Array.isArray(chunk.data) ? chunk.data : [chunk.data];
@@ -57,9 +62,11 @@ export async function* streamChat(
           : Array.isArray(raw)
             ? raw.map((p: unknown) => (typeof p === "string" ? p : (p as { text?: string })?.text ?? "")).join("")
             : "";
-        const delta = fullText.slice(prevContent.length);
+        const msgId = (msg?.id as string | undefined) ?? "__default__";
+        const prev = seen.get(msgId) ?? "";
+        const delta = fullText.slice(prev.length);
         if (delta) {
-          prevContent = fullText;
+          seen.set(msgId, fullText);
           yield delta;
         }
       }

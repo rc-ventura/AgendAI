@@ -116,6 +116,50 @@ describe("UC3 — cancelar agendamento por texto", () => {
 
 // ── UC4 — valores e pagamento ─────────────────────────────────────────────────
 
+// ── Streaming delta tracking (regression: per-message-id accumulator) ─────────
+
+describe("streamChat — delta tracking across multiple AIMessages", () => {
+  it("accumulates deltas per message id (single growing message)", async () => {
+    mockStream.mockReturnValue(
+      makeStreamEvents([
+        { event: "messages/partial", data: [{ id: "m1", role: "assistant", content: "Olá" }] },
+        { event: "messages/partial", data: [{ id: "m1", role: "assistant", content: "Olá, tudo" }] },
+        { event: "messages/partial", data: [{ id: "m1", role: "assistant", content: "Olá, tudo bem?" }] },
+      ])
+    );
+
+    const chunks: string[] = [];
+    for await (const c of streamChat("oi", "t1")) chunks.push(c);
+
+    expect(chunks).toEqual(["Olá", ", tudo", " bem?"]);
+    expect(chunks.join("")).toBe("Olá, tudo bem?");
+  });
+
+  it("does NOT truncate a second AIMessage that follows a longer one", async () => {
+    // Regression for: prevContent leaking across messages would slice off the
+    // beginning of msg #2 until it grew past msg #1's length.
+    mockStream.mockReturnValue(
+      makeStreamEvents([
+        // First AIMessage (e.g. "thinking out loud" before a tool call)
+        { event: "messages/partial", data: [{ id: "m1", role: "assistant", content: "Vou verificar isso pra você agora." }] },
+        // Second AIMessage starts from scratch with a SHORTER beginning
+        { event: "messages/partial", data: [{ id: "m2", role: "assistant", content: "Encontrei" }] },
+        { event: "messages/partial", data: [{ id: "m2", role: "assistant", content: "Encontrei 3 horários" }] },
+      ])
+    );
+
+    const chunks: string[] = [];
+    for await (const c of streamChat("agendar", "t1")) chunks.push(c);
+
+    // m1 fully delivered, m2 fully delivered (not silently truncated)
+    expect(chunks).toEqual([
+      "Vou verificar isso pra você agora.",
+      "Encontrei",
+      " 3 horários",
+    ]);
+  });
+});
+
 describe("UC4 — consultar valores e formas de pagamento", () => {
   it("yields price and payment info", async () => {
     const reply = "Consulta: R$ 200,00. Formas: PIX, Cartão, Dinheiro.";
