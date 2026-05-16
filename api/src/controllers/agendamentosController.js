@@ -43,7 +43,20 @@ function createAgendamentosController({ agendamentosService }) {
     }
   }
 
-  return { criar, buscar, cancelar };
+  async function listar(req, res, next) {
+    try {
+      const { email, status } = req.query;
+      if (!email || !isValidEmail(email)) {
+        return res.status(400).json({ error: 'Parâmetro email inválido ou ausente' });
+      }
+      const result = agendamentosService.listarAgendamentosPaciente(email, status || null);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  return { criar, buscar, cancelar, listar };
 }
 
 module.exports = { createAgendamentosController };

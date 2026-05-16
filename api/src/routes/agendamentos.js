@@ -15,6 +15,7 @@ function agendamentosRouter(db) {
   const agendamentosService = createAgendamentosService(db, { agendamentosRepo, pacientesRepo, horariosRepo });
   const controller = createAgendamentosController({ agendamentosService });
 
+  router.get('/', controller.listar);
   router.post('/', controller.criar);
   router.get('/:id', controller.buscar);
   router.patch('/:id/cancelar', controller.cancelar);

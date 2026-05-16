@@ -64,19 +64,13 @@ function createAgendamentosService(db, { agendamentosRepo, pacientesRepo, horari
       agendamentosRepo.updateStatus(id, 'cancelado');
       horariosRepo.updateDisponivel(agendamento.horario_id, 1);
       cache.delByPrefix('horarios');
-      return agendamentosRepo.findById(id);
     });
 
-    const row = transaction();
-    return formatAgendamento(row);
+    transaction();
+    return { id: agendamento.id, status: 'cancelado' };
   }
 
-  function listarAgendamentosPaciente(email, status = null) {
-    const rows = agendamentosRepo.findByPacienteEmail(email, status);
-    return rows.map(formatAgendamento);
-  }
-
-  return { criarAgendamento, buscarAgendamento, cancelarAgendamento, listarAgendamentosPaciente };
+  return { criarAgendamento, buscarAgendamento, cancelarAgendamento };
 }
 
 module.exports = { createAgendamentosService };

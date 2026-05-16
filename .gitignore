@@ -20,3 +20,16 @@ Thumbs.db
 
 # Coverage
 coverage/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+.pytest_cache/
+
+# LangGraph / LangSmith
+.langgraph_api/
