@@ -11,12 +11,21 @@ _EMAIL_TOOLS = {"criar_agendamento", "cancelar_agendamento"}
 
 
 def _find_last_email_tool_call(state: AgendAIState) -> tuple[str, str] | tuple[None, None]:
-    """Returns (tool_name, tool_call_id) for the most recent email-triggering tool call."""
+    """Returns (tool_name, tool_call_id) for an email-triggering tool call in the
+    CURRENT execution round only.
+
+    Only the most recent AIMessage with tool_calls is inspected. If that message
+    does not contain any email-triggering tool call, we return (None, None)
+    immediately instead of scanning older messages — otherwise tool calls from
+    previous turns (already processed) would be re-detected and cause duplicate
+    emails to be sent.
+    """
     for msg in reversed(state["messages"]):
         if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
             for tc in msg.tool_calls:
                 if tc.get("name") in _EMAIL_TOOLS:
                     return tc["name"], tc["id"]
+            return None, None
     return None, None
 
 
