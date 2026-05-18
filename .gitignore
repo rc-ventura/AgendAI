@@ -33,3 +33,9 @@ dist/
 
 # LangGraph / LangSmith
 .langgraph_api/
+
+# agent-ui-pro (professional UI)
+agent-ui-pro/node_modules/
+agent-ui-pro/.next/
+agent-ui-pro/.env.local
+*.tsbuildinfo

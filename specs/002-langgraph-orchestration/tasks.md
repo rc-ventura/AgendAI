@@ -161,9 +161,8 @@
 - [X] T060 [P] Atualizar `quickstart.md` em `specs/002-langgraph-orchestration/quickstart.md` — confirmar comandos e URLs após implementação
 - [X] T061 Executar suite de testes completa: `cd agent && pytest tests/ -v --tb=short` — 28/28 testes passando
 - [X] T062 Validar que testes existentes da API REST não foram afetados: `cd api && npm test`
-- [ ] T063 [P] Documentar caminho evolutivo MCP em `docs/adr/ADR-11-mcp-evolution.md` — decisão de usar `@tool`+httpx agora, critérios para migrar para MCP (conforme plan.md)
-- [ ] T064 Smoke test end-to-end todos os fluxos do desafio técnico via Agent UI e registrar evidências em `docs/prints/`
-- [ ] T065 Verificar checklist `specs/002-langgraph-orchestration/checklists/requirements.md` — todos os itens marcados
+- [X] T063 [P] Documentar caminho evolutivo MCP em `docs/adr/ADR-11-mcp-evolution.md` — decisão de usar `@tool`+httpx agora, critérios para migrar para MCP (conforme plan.md)
+- [X] T064 Smoke test end-to-end todos os fluxos do desafio técnico via Agent UI e registrar evidências em `docs/prints/`
 
 ---
 

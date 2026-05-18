@@ -100,6 +100,80 @@ async def test_audio_path_calls_transcriber_and_tts():
 
 
 @pytest.mark.asyncio
+async def test_full_scheduling_flow_us2(mock_api_client):
+    """TST-02 — US2: text → buscar_horarios → criar_agendamento → confirm + email sent."""
+    from agent.graph import graph
+    from langchain_core.messages import ToolMessage
+
+    call_count = 0
+
+    async def llm_side_effect(messages, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # Round 1: LLM asks for available slots
+            return AIMessage(
+                content="",
+                tool_calls=[{"id": "c1", "name": "buscar_horarios_disponiveis", "args": {"data": None}}],
+            )
+        if call_count == 2:
+            # Round 2: LLM books the appointment
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {"id": "c2", "name": "criar_agendamento",
+                     "args": {"paciente_email": "joao@email.com", "horario_id": 1}}
+                ],
+            )
+        # Round 3+: final confirmation
+        return AIMessage(content="Consulta agendada com sucesso para o Dr. Carlos Lima!")
+
+    with patch("agent.nodes.llm_core.llm") as mock_llm, \
+         patch("agent.nodes.email_sender._send_smtp") as mock_smtp:
+        mock_llm.ainvoke = AsyncMock(side_effect=llm_side_effect)
+        mock_smtp.return_value = None
+
+        state = make_state(messages=[HumanMessage(content="Quero agendar uma consulta para joao@email.com")])
+        result = await graph.ainvoke(state, config={"configurable": {"thread_id": "test-5"}})
+
+    last_msg = result["messages"][-1]
+    assert isinstance(last_msg, AIMessage)
+    assert "agendada" in last_msg.content.lower() or last_msg.content
+    assert result["email_pending"] is False
+
+
+@pytest.mark.asyncio
+async def test_cancellation_flow_us3(mock_api_client):
+    """TST-04 — US3: text → cancelar_agendamento → confirm + email sent."""
+    from agent.graph import graph
+
+    call_count = 0
+
+    async def llm_side_effect(messages, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return AIMessage(
+                content="",
+                tool_calls=[{"id": "c3", "name": "cancelar_agendamento", "args": {"agendamento_id": 1}}],
+            )
+        return AIMessage(content="Seu agendamento foi cancelado com sucesso.")
+
+    with patch("agent.nodes.llm_core.llm") as mock_llm, \
+         patch("agent.nodes.email_sender._send_smtp") as mock_smtp:
+        mock_llm.ainvoke = AsyncMock(side_effect=llm_side_effect)
+        mock_smtp.return_value = None
+
+        state = make_state(messages=[HumanMessage(content="Cancele meu agendamento 1 para joao@email.com")])
+        result = await graph.ainvoke(state, config={"configurable": {"thread_id": "test-6"}})
+
+    last_msg = result["messages"][-1]
+    assert isinstance(last_msg, AIMessage)
+    assert "cancelado" in last_msg.content.lower() or last_msg.content
+    assert result["email_pending"] is False
+
+
+@pytest.mark.asyncio
 async def test_run_id_present_for_langsmith():
     """US5: graph execution produces a run_id traceable in LangSmith"""
     from agent.graph import graph
