@@ -26,7 +26,15 @@ import { getApiKey } from "@/lib/api-key";
 import { useThreads } from "./Thread";
 import { toast } from "sonner";
 
-export type StateType = { messages: Message[]; ui?: UIMessage[] };
+export type StateType = {
+  messages: Message[];
+  ui?: UIMessage[];
+  /**
+   * Optional TTS audio payload emitted by the agent for the latest assistant
+   * turn. May be a base64-encoded MP3 string or a raw byte array.
+   */
+  final_response?: string | number[];
+};
 
 const useTypedStream = useStream<
   StateType,

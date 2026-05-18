@@ -229,12 +229,24 @@ export function Thread() {
     };
   }, []);
 
+  const finalResponse = stream.values?.final_response;
+
+  // Derive a stable signature so array references that contain identical bytes
+  // don't re-trigger the effect across renders (the SDK may rebuild the array
+  // on each state mutation).
+  const finalResponseSignature =
+    typeof finalResponse === "string"
+      ? `s:${finalResponse.length}:${finalResponse.slice(0, 16)}`
+      : Array.isArray(finalResponse)
+        ? `a:${finalResponse.length}:${finalResponse[0] ?? ""}:${finalResponse[finalResponse.length - 1] ?? ""}`
+        : null;
+
   useEffect(() => {
     if (stream.isLoading) return;
-
-    const finalResponse = (stream as any).values?.final_response as unknown;
-    if (!finalResponse || finalResponse === prevFinalResponseRef.current) return;
-    prevFinalResponseRef.current = finalResponse;
+    if (!finalResponse || finalResponseSignature === prevFinalResponseRef.current) {
+      return;
+    }
+    prevFinalResponseRef.current = finalResponseSignature;
 
     let bytes: Uint8Array | null = null;
     if (typeof finalResponse === "string") {
@@ -254,7 +266,7 @@ export function Thread() {
     const blob = new Blob([bytes], { type: "audio/mpeg" });
     const url = URL.createObjectURL(blob);
     setTtsAudioMap((prev) => ({ ...prev, [lastAiMsg.id!]: url }));
-  }, [stream.isLoading, (stream as any).values?.final_response]);
+  }, [stream.isLoading, finalResponse, finalResponseSignature, stream.messages]);
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
