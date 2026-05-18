@@ -212,8 +212,8 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
               </h1>
             </div>
             <p className="text-muted-foreground">
-              Welcome to Agent Chat! Before you get started, you need to enter
-              the URL of the deployment and the assistant / graph ID.
+              Bem-vindo ao Agent Chat! Antes de começar, informe a URL do
+              deployment e o ID do assistente / grafo.
             </p>
           </div>
           <form
@@ -237,11 +237,10 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
           >
             <div className="flex flex-col gap-2">
               <Label htmlFor="apiUrl">
-                Deployment URL<span className="text-rose-500">*</span>
+                URL do deployment<span className="text-rose-500">*</span>
               </Label>
               <p className="text-muted-foreground text-sm">
-                This is the URL of your LangGraph deployment. Can be a local, or
-                production deployment.
+                URL do seu deployment LangGraph. Pode ser local ou de produção.
               </p>
               <Input
                 id="apiUrl"
@@ -254,12 +253,11 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
 
             <div className="flex flex-col gap-2">
               <Label htmlFor="assistantId">
-                Assistant / Graph ID<span className="text-rose-500">*</span>
+                ID do assistente / grafo<span className="text-rose-500">*</span>
               </Label>
               <p className="text-muted-foreground text-sm">
-                This is the ID of the graph (can be the graph name), or
-                assistant to fetch threads from, and invoke when actions are
-                taken.
+                ID do grafo (pode ser o nome) ou do assistente usado para
+                listar threads e executar ações.
               </p>
               <Input
                 id="assistantId"
@@ -271,12 +269,12 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
             </div>
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="apiKey">LangSmith API Key</Label>
+              <Label htmlFor="apiKey">Chave da API LangSmith</Label>
               <p className="text-muted-foreground text-sm">
-                This is <strong>NOT</strong> required if using a local LangGraph
-                server. This value is stored in your browser's local storage and
-                is only used to authenticate requests sent to your LangGraph
-                server.
+                <strong>Não</strong> é necessário ao usar um servidor LangGraph
+                local. O valor é armazenado no localStorage do navegador e
+                usado apenas para autenticar requisições ao seu servidor
+                LangGraph.
               </p>
               <PasswordInput
                 id="apiKey"
@@ -291,10 +289,10 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
               <div className="flex items-center justify-between gap-4">
                 <div className="flex flex-col gap-1">
                   <Label htmlFor="agentBuilderEnabled">
-                    Built with Agent Builder
+                    Criado com Agent Builder
                   </Label>
                   <p className="text-muted-foreground text-sm">
-                    Enable this for Agent Builder deployments.
+                    Ative para deployments do Agent Builder.
                   </p>
                 </div>
                 <Switch
@@ -310,7 +308,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
                 type="submit"
                 size="lg"
               >
-                Continue
+                Continuar
                 <ArrowRight className="size-5" />
               </Button>
             </div>
