@@ -24,6 +24,14 @@ export function useFileUpload({
   const [dragOver, setDragOver] = useState(false);
   const dragCounter = useRef(0);
 
+  // Keep a ref of the latest blocks so global drop/paste handlers can read
+  // duplicates without forcing the listener-registration effect to re-run on
+  // every upload.
+  const contentBlocksRef = useRef(contentBlocks);
+  useEffect(() => {
+    contentBlocksRef.current = contentBlocks;
+  }, [contentBlocks]);
+
   const isDuplicate = (file: File, blocks: ContentBlock.Multimodal.Data[]) => {
     if (file.type === "application/pdf") {
       return blocks.some(
@@ -114,11 +122,12 @@ export function useFileUpload({
       const invalidFiles = files.filter(
         (file) => !SUPPORTED_FILE_TYPES.includes(file.type),
       );
+      const currentBlocks = contentBlocksRef.current;
       const duplicateFiles = validFiles.filter((file) =>
-        isDuplicate(file, contentBlocks),
+        isDuplicate(file, currentBlocks),
       );
       const uniqueFiles = validFiles.filter(
-        (file) => !isDuplicate(file, contentBlocks),
+        (file) => !isDuplicate(file, currentBlocks),
       );
 
       if (invalidFiles.length > 0) {
@@ -185,7 +194,7 @@ export function useFileUpload({
       window.removeEventListener("dragover", handleWindowDragOver);
       dragCounter.current = 0;
     };
-  }, [contentBlocks]);
+  }, []);
 
   const removeBlock = (idx: number) => {
     setContentBlocks((prev) => prev.filter((_, i) => i !== idx));
