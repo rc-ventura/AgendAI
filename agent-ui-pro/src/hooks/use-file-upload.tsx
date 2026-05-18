@@ -123,12 +123,12 @@ export function useFileUpload({
 
       if (invalidFiles.length > 0) {
         toast.error(
-          "You have uploaded invalid file type. Please upload a JPEG, PNG, GIF, WEBP image or a PDF.",
+          "Formato inválido. Envie uma imagem JPEG, PNG, GIF, WEBP ou um PDF.",
         );
       }
       if (duplicateFiles.length > 0) {
         toast.error(
-          `Duplicate file(s) detected: ${duplicateFiles.map((f) => f.name).join(", ")}. Each file can only be uploaded once per message.`,
+          `Arquivo duplicado: ${duplicateFiles.map((f) => f.name).join(", ")}. Cada arquivo pode ser enviado apenas uma vez por mensagem.`,
         );
       }
 
@@ -248,7 +248,7 @@ export function useFileUpload({
     }
     if (duplicateFiles.length > 0) {
       toast.error(
-        `Duplicate file(s) detected: ${duplicateFiles.map((f) => f.name).join(", ")}. Each file can only be uploaded once per message.`,
+        `Arquivo duplicado: ${duplicateFiles.map((f) => f.name).join(", ")}. Cada arquivo pode ser enviado apenas uma vez por mensagem.`,
       );
     }
     if (uniqueFiles.length > 0) {
