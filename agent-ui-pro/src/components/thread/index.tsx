@@ -215,7 +215,10 @@ export function Thread() {
 
   const audio = useAudio({ onAudio: handleAudio, disabled: isLoading });
 
-  // Map messageId → object URL for TTS audio responses
+  // Map messageId → object URL for TTS audio responses.
+  // Bounded LRU-ish: keeps at most MAX_TTS_AUDIO entries to avoid unbounded
+  // blob accumulation during long audio-heavy sessions.
+  const MAX_TTS_AUDIO = 10;
   const [ttsAudioMap, setTtsAudioMap] = useState<Record<string, string>>({});
   const prevFinalResponseRef = useRef<unknown>(null);
 
@@ -228,6 +231,18 @@ export function Thread() {
       });
     };
   }, []);
+
+  // Revoke all blob URLs when switching threads (e.g. clicking a thread in
+  // the history sidebar, which calls setThreadId via nuqs directly and
+  // bypasses the local setThreadId helper).
+  useEffect(() => {
+    return () => {
+      setTtsAudioMap((prev) => {
+        Object.values(prev).forEach(URL.revokeObjectURL);
+        return {};
+      });
+    };
+  }, [threadId]);
 
   const finalResponse = stream.values?.final_response;
 
@@ -265,7 +280,21 @@ export function Thread() {
 
     const blob = new Blob([bytes], { type: "audio/mpeg" });
     const url = URL.createObjectURL(blob);
-    setTtsAudioMap((prev) => ({ ...prev, [lastAiMsg.id!]: url }));
+    setTtsAudioMap((prev) => {
+      const msgId = lastAiMsg.id!;
+      // Revoke previous URL for this same message id (overwrite case).
+      if (prev[msgId]) URL.revokeObjectURL(prev[msgId]);
+
+      const entries = Object.entries(prev).filter(([id]) => id !== msgId);
+      entries.push([msgId, url]);
+
+      // Drop oldest entries beyond the cap, revoking their URLs.
+      while (entries.length > MAX_TTS_AUDIO) {
+        const [, oldUrl] = entries.shift()!;
+        URL.revokeObjectURL(oldUrl);
+      }
+      return Object.fromEntries(entries);
+    });
   }, [stream.isLoading, finalResponse, finalResponseSignature, stream.messages]);
 
   const handleSubmit = (e: FormEvent) => {
