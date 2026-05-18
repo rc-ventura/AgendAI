@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 export const AUDIO_MAX_BYTES = 25 * 1024 * 1024; // 25 MB
@@ -18,6 +18,14 @@ export function useAudio({ onAudio, disabled }: UseAudioOptions) {
   const chunksRef = useRef<Blob[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  // Keep the latest onAudio in a ref so async callbacks (recorder.onstop fires
+  // long after toggleRecord ran) always call the current callback, not a
+  // stale closure from when recording started.
+  const onAudioRef = useRef(onAudio);
+  useEffect(() => {
+    onAudioRef.current = onAudio;
+  }, [onAudio]);
+
   async function toggleRecord() {
     if (disabled || micDenied) return;
     if (recording) {
@@ -33,7 +41,7 @@ export function useAudio({ onAudio, disabled }: UseAudioOptions) {
       recorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: "audio/webm" });
         stream.getTracks().forEach((t) => t.stop());
-        onAudio(blob);
+        onAudioRef.current(blob);
       };
       recorder.start();
       mediaRef.current = recorder;
@@ -57,7 +65,7 @@ export function useAudio({ onAudio, disabled }: UseAudioOptions) {
       e.target.value = "";
       return;
     }
-    onAudio(file);
+    onAudioRef.current(file);
     e.target.value = "";
   }
 
