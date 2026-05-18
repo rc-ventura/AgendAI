@@ -282,9 +282,9 @@ export function StateView({
             size="sm"
           >
             {expanded ? (
-              <ChevronsUpDown className="h-4 w-4" />
-            ) : (
               <ChevronsDownUp className="h-4 w-4" />
+            ) : (
+              <ChevronsUpDown className="h-4 w-4" />
             )}
           </Button>
         )}
