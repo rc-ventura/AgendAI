@@ -46,20 +46,26 @@ services:
     networks:
       - agendai-network
 
-  agent-ui:
+  agent-ui-pro:
     build:
-      context: ./agent-ui
+      context: ./agent-ui-pro
       args:
         NEXT_PUBLIC_API_URL: http://localhost:8080
-        NEXT_PUBLIC_GRAPH_ID: agendai_agent
+        NEXT_PUBLIC_ASSISTANT_ID: agendai_agent
         NEXT_PUBLIC_LANGGRAPH_API_KEY: ${LANGGRAPH_AUTH_TOKEN}
     ports:
-      - "3001:3001"
+      - "3002:3002"
     depends_on:
       - nginx
     restart: unless-stopped
     networks:
       - agendai-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3002/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
 networks:
   agendai-network:

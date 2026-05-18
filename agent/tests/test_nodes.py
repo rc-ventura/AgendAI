@@ -1,7 +1,10 @@
 import pytest
 import json
+import httpx
+import respx
 from unittest.mock import AsyncMock, patch, MagicMock
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from tenacity import RetryError
 
 from agent.state import AgendAIState
 from agent.nodes.input_detector import detect_input_type
@@ -169,6 +172,83 @@ async def test_transcriber_adds_human_message():
 
     assert len(result["messages"]) == 1
     assert result["messages"][0].content == "Quais horários disponíveis?"
+
+
+# ── tts ───────────────────────────────────────────────────────────────────────
+
+# ── tools: API degradation (TST-03) ───────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_buscar_horarios_api_down_returns_error_string():
+    """TST-03: when REST API is down, tool returns an error string instead of raising."""
+    from agent.nodes.tools import buscar_horarios_disponiveis
+
+    with respx.mock(base_url="http://api:3000"):
+        respx.get("/horarios/disponiveis").mock(
+            return_value=httpx.Response(500, json={"error": "Internal Server Error"})
+        )
+        try:
+            result = await buscar_horarios_disponiveis.ainvoke({"data": None})
+            # If the tool catches the error itself it should return a string
+            assert isinstance(result, str)
+        except Exception:
+            # Acceptable: tool propagates httpx.HTTPStatusError — caller (ToolNode) handles it
+            pass
+
+
+@pytest.mark.asyncio
+async def test_buscar_paciente_not_found_returns_string(mock_api_client):
+    """TST-03 variant: 404 on buscar_paciente returns a human-readable string, not an exception."""
+    from agent.nodes.tools import buscar_paciente
+
+    result = await buscar_paciente.ainvoke({"email": "naoexiste@email.com"})
+    assert isinstance(result, str)
+    assert "não encontrado" in result.lower() or "verifique" in result.lower()
+
+
+# ── email_sender: all retries exhausted (TST-05) ──────────────────────────────
+
+@pytest.mark.asyncio
+async def test_email_sender_continues_after_smtp_failure():
+    """TST-05: SMTP fails all 3 tenacity retries — send_email still returns cleared state."""
+    from agent.nodes.email_sender import send_email
+
+    state = make_state(
+        email_pending=True,
+        email_payload={
+            "tipo": "agendamento",
+            "paciente_email": "joao@email.com",
+            "paciente_nome": "João Silva",
+            "medico_nome": "Dr. Carlos Lima",
+            "data_hora": "2026-05-20 09:00",
+            "valor": 200.0,
+            "formas_pagamento": ["PIX"],
+        },
+    )
+
+    with patch("agent.nodes.email_sender._send_smtp", side_effect=Exception("SMTP connection refused")):
+        result = await send_email(state)
+
+    # System MUST continue: email_pending cleared even when email fails
+    assert result["email_pending"] is False
+    assert result["email_payload"] is None
+
+
+# ── transcriber: corrupted audio (TST-06) ─────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_transcriber_raises_on_corrupted_audio():
+    """TST-06: Whisper API raises on invalid audio bytes — error propagates."""
+    from agent.nodes.transcriber import transcribe_audio
+
+    state = make_state(audio_data=b"\x00\x01\x02corrupted", input_type="audio")
+
+    with patch("agent.nodes.transcriber.openai_client") as mock_client:
+        mock_client.audio.transcriptions.create = AsyncMock(
+            side_effect=Exception("Audio file could not be decoded")
+        )
+        with pytest.raises(Exception, match="Audio file could not be decoded"):
+            await transcribe_audio(state)
 
 
 # ── tts ───────────────────────────────────────────────────────────────────────

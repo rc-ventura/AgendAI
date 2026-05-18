@@ -5,18 +5,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/002-langgraph-orchestration/plan.md
+at specs/003-professional-chat-ui/plan.md
 <!-- SPECKIT END -->
 
 ## Project Overview
 
-AgendAI is a medical scheduling automation system consisting of three independent components:
+AgendAI is a medical scheduling automation system consisting of four independent components:
 
 1. **REST API** (`api/`) — Node.js 20 + Express 4 + SQLite (`better-sqlite3`) that manages doctors, patients, time slots, appointments, and (mock) payments.
 2. **LangGraph Agent** (`agent/`) — Python 3.11 + LangGraph v1.0+ StateGraph that handles the chat interface: input routing, GPT-4o-mini with tool calling, Whisper/TTS audio pipeline, and Gmail SMTP transactional email.
-3. **Chat UI** (`agent-ui/`) — Next.js 14 frontend using `@langchain/langgraph-sdk` to stream conversations with the agent.
+3. **Chat UI** (`agent-ui-pro/`) — Next.js 14 + shadcn/ui professional frontend using `@langchain/langgraph-sdk` with audio support (mic + file upload). Runs on port 3002.
 
-Everything starts with a single `docker compose up --build -d`. The API runs on port 3000; the LangGraph agent on port 8123 (via nginx proxy on 8080); the chat UI on port 3001.
+Everything starts with a single `docker compose up --build -d`. The API runs on port 3000; the LangGraph agent on port 8123 (via nginx proxy on 8080); the chat UI on port 3002.
 
 ## Commands
 
