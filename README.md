@@ -1,265 +1,283 @@
-# AgendAI — Automação de Atendimento Médico com LangGraph e IA
+# AgendAI — Automação de Atendimento Médico com IA
 
-Sistema de agendamento médico automatizado com LangGraph v1.0+, GPT-4o-mini, API REST e suporte a texto e áudio.
+Sistema de agendamento médico automatizado com agente LangGraph, GPT-4o-mini, API REST Node.js e suporte a texto e áudio.
 
-## Visão Geral
+---
 
-| Componente | Tecnologia | Porta |
-|---|---|---|
-| API REST | Node.js 20 + Express 4 + SQLite | 3000 |
-| Agente LangGraph | Python 3.11 + LangGraph v1.0+ | 8123 |
-| Chat UI | Next.js 14 + @langchain/langgraph-sdk | 3001 |
-| LLM | GPT-4o-mini (tool calling) | — |
-| STT | OpenAI Whisper (whisper-1) | — |
-| TTS | OpenAI TTS (tts-1, voz alloy) | — |
-| E-mail | Gmail SMTP via Python + tenacity | — |
-| Observabilidade | LangSmith | — |
+## Quickstart
 
-## Pré-requisitos
-
-| Ferramenta | Versão |
-|---|---|
-| Docker | ≥ 24 |
-| Docker Compose | v2 |
-| Conta OpenAI | Chave de API com créditos (GPT-4o-mini, Whisper, TTS) |
-| Python 3.11+ | Apenas para rodar testes do agente localmente |
-| Node.js 20 LTS | Apenas para rodar testes da UI/API localmente |
-
-## Instalação e Execução
-
-### 1. Clonar e Configurar
+> Única variável obrigatória: `OPENAI_API_KEY`. Todas as outras já estão preenchidas no `.env.example` (Gmail e LangSmith são opcionais).
 
 ```bash
 git clone <url-do-repositorio>
 cd AgendAI
 cp .env.example .env
-```
-
-Editar `.env` — variáveis obrigatórias:
-```env
-# Obrigatório
-OPENAI_API_KEY=sk-...
-
-# Opcional — notificações por e-mail
-GMAIL_USER=clinica@gmail.com
-GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx   # App Password (não a senha normal)
-
-# Opcional — observabilidade LangSmith
-LANGCHAIN_TRACING_V2=true
-LANGCHAIN_API_KEY=lsv2_...
-```
-
-> `PORT`, `DB_PATH` e `API_BASE_URL` já têm valores padrão corretos no `docker-compose.yml`.
-
-### 2. Subir os Serviços
-
-```bash
+# Edite .env e preencha: OPENAI_API_KEY=sk-...
 docker compose up --build -d
 ```
 
-Verificar se está no ar:
+Aguarde o build (~2 min na primeira vez) e acesse:
+
+| Serviço               | URL                                 |
+| ---------------------- | ----------------------------------- |
+| Chat UI                | http://localhost:3002               |
+| API REST               | http://localhost:3000               |
+| Painel de agendamentos | http://localhost:3000/painel        |
+| Agente LangGraph       | http://localhost:8080 (proxy nginx) |
+
+Verifique se está no ar:
+
 ```bash
 docker compose ps
 curl http://localhost:3000/horarios/disponiveis
 ```
 
-Esperado: array JSON com horários disponíveis.
+---
 
-Após o build completo, acesse o chat em **http://localhost:3001**.
+## Demonstração
 
-### 3. Testar os fluxos principais
+### Tela inicial do chat
 
-| Fluxo | O que enviar no chat | Esperado |
-|---|---|---|
-| Horários disponíveis | "Quais horários vocês têm?" | Lista com médico, data e hora |
-| Agendar consulta | "Agendar para joao@email.com horário 3" | Confirmação + e-mail (se Gmail configurado) |
-| Cancelar consulta | "Cancelar minha consulta 1" | Confirmação de cancelamento |
-| Valores/pagamento | "Quanto custa a consulta?" | Preço em R$ + formas aceitas |
-| Áudio | Clique 🎙 ou 📎 e envie um `.mp3` | Resposta do agente em texto |
+![Tela inicial](docs/prints/chat-ui-tela-inicial.png)
 
-### 4. Rodar Testes
+### Consulta de formas de pagamento
 
-**Agente Python** (28 testes — nodes, tools, grafo):
-```bash
-cd agent
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-pytest tests/ -v
-```
+![Formas de pagamento](docs/prints/chat-formas-pagamento.png)
 
-**API REST** (34 testes Jest):
-```bash
-cd api
-npm install
-npm test
-```
+### E-mail de confirmação de agendamento (Gmail)
 
-**Chat UI** (Vitest + MSW — sem Docker):
-```bash
-cd agent-ui
-npm install
-npm test
-```
+![Email de confirmação](docs/prints/email-confirmacao-agendamento.png)
 
-## Uso
+### E-mail de cancelamento (Gmail)
 
-### Chat via UI
+![Email de cancelamento](docs/prints/email-cancelamento-consulta.png)
 
-Acesse `http://localhost:3001` — a UI conecta diretamente ao LangGraph server (via proxy nginx em `:8080`). Para chamadas programáticas use o SDK `@langchain/langgraph-sdk` (ver `agent-ui/src/lib/langgraph.ts`).
+### Painel HTML de agendamentos (`GET /painel`)
 
-### API direta
+![Painel de agendamentos](docs/prints/painel-agendamentos.png)
 
-```bash
-# Horários disponíveis
-curl http://localhost:3000/horarios/disponiveis
+### Erros da API (Postman)
 
-# Buscar paciente
-curl http://localhost:3000/pacientes/joao@email.com
+![404 Paciente não encontrado](docs/prints/postman-404-paciente-nao-encontrado.png)
 
-# Criar agendamento
-curl -X POST http://localhost:3000/agendamentos \
-  -H "Content-Type: application/json" \
-  -d '{"paciente_email":"pedro@email.com","horario_id":3}'
+![409 Horário indisponível](docs/prints/postman-409-horario-indisponivel.png)
 
-# Buscar agendamento
-curl http://localhost:3000/agendamentos/1
+### Testes passando
 
-# Cancelar agendamento
-curl -X PATCH http://localhost:3000/agendamentos/1/cancelar
+![API — 39 testes Jest](docs/prints/api-testes-39-passando.png)
 
-# Pagamentos
-curl http://localhost:3000/pagamentos
+![Agente — 70 testes pytest](docs/prints/agente-testes-70-passando.png)
 
-# Painel HTML
-open http://localhost:3000/painel
-```
+### Grafo do agente (LangGraph Studio)
 
-## Nós do Grafo LangGraph
+![LangGraph Studio](docs/prints/langgraph_studio.png)
 
-| Nó | Arquivo | Função |
-|---|---|---|
-| `detect_input_type` | `agent/agent/nodes/input_detector.py` | Roteia texto vs. áudio |
-| `transcribe_audio` | `agent/agent/nodes/transcriber.py` | Whisper STT |
-| `chat_with_llm` + `execute_tools` | `agent/agent/nodes/llm_core.py` + `tools.py` | GPT-4o-mini + tool calling + HTTP para API |
-| `process_tool_results` | `agent/agent/nodes/tool_result_processor.py` | Detecta sucesso de criar/cancelar agendamento e prepara payload de e-mail |
-| `send_email` | `agent/agent/nodes/email_sender.py` | Gmail SMTP (retry via tenacity) |
-| `synthesize_tts` | `agent/agent/nodes/tts.py` | OpenAI TTS (voz alloy) |
+### Gravações de tela
 
-## Banco de Dados
+| Fluxo                                | Arquivo                                                           |
+| ------------------------------------ | ----------------------------------------------------------------- |
+| Consulta de horários disponíveis   | [demo-consulta-horarios.mov](docs/prints/demo-consulta-horarios.mov) |
+| Fluxo de áudio (upload + resposta)  | [demo-fluxo-audio.mov](docs/prints/demo-fluxo-audio.mov)             |
+| Agendamento via chat                 | [demo-agendamento-chat.mov](docs/prints/demo-agendamento-chat.mov)   |
+| Cancelamento via chat                | [demo-cancelamento-chat.mov](docs/prints/demo-cancelamento-chat.mov) |
 
-SQLite com 5 tabelas: `medicos`, `pacientes`, `horarios`, `agendamentos`, `pagamentos`.
+---
 
-**Seed inicial**: 3 médicos, 5 pacientes, 10 horários (próximos 7 dias), 2 agendamentos pré-confirmados.
+## Stack
 
-**Resetar banco**:
-```bash
-docker compose down -v
-docker compose up --build -d
-```
+| Componente      | Tecnologia                            | Porta |
+| --------------- | ------------------------------------- | ----- |
+| API REST        | Node.js 20 + Express 4 + SQLite       | 3000  |
+| Agente          | Python 3.11 + LangGraph v1.0+         | 8123  |
+| Chat UI         | Next.js 14 + @langchain/langgraph-sdk | 3002  |
+| Proxy           | nginx                                 | 8080  |
+| LLM             | GPT-4o-mini (tool calling)            | —    |
+| STT             | OpenAI Whisper (whisper-1)            | —    |
+| TTS             | OpenAI TTS (tts-1, voz alloy)         | —    |
+| E-mail          | Gmail SMTP + tenacity (retry 3x)      | —    |
+| Observabilidade | LangSmith (opcional)                  | —    |
 
-## Entidades do Seed
+---
 
-| Paciente | E-mail | Telefone |
-|---|---|---|
-| João Silva | joao@email.com | 11999990001 |
-| Maria Santos | maria@email.com | 11999990002 |
-| Pedro Oliveira | pedro@email.com | 11999990003 |
-| Ana Ferreira | ana@email.com | 11999990004 |
-| Lucas Pereira | lucas@email.com | 11999990005 |
+## Fluxos suportados
 
-## Diferenciais Implementados
+| Fluxo                  | O que enviar no chat                            | Resultado                              |
+| ---------------------- | ----------------------------------------------- | -------------------------------------- |
+| Horários disponíveis | `"Quais horários vocês têm?"`              | Lista com médico, data e hora         |
+| Agendar consulta       | `"Agendar para joao@email.com no horário 3"` | Confirmação + e-mail ao paciente     |
+| Cancelar consulta      | `"Cancelar minha consulta 1"`                 | Confirmação de cancelamento + e-mail |
+| Valores e pagamento    | `"Quanto custa a consulta?"`                  | Preço em R$ + formas aceitas          |
+| Entrada por áudio     | Clique 🎙 ou 📎 e envie um `.mp3`             | Whisper transcreve → agente responde  |
 
-- **Testes unitários** — Jest + Supertest (34 testes, 7 suites: rotas, cache, concorrência, validação)
-- **Arquitetura em camadas** — `routes → controllers → services → repositories` com injeção de dependência
-- **Function calling** — GPT-4o-mini com 5 funções mapeadas para endpoints REST
-- **Retry** — Gmail SMTP (3x, backoff exponencial) e OpenAI TTS (3x) via `tenacity` no agente LangGraph
-- **Cache de disponibilidade** — TTL 60s com `node-cache`, invalidado em cada escrita
-- **Rate limiting** — 100 req/15 min por IP via `express-rate-limit`
-- **Painel HTML** — `GET /painel` com tabela colorida de agendamentos
+---
 
-## Agente LangGraph
+## Variáveis de ambiente
 
-### Arquitetura do Grafo
+Todas as variáveis estão documentadas no `.env.example`. Apenas uma é obrigatória para o sistema funcionar:
 
-```
-START → detect_input_type → (text) → chat_with_llm ⇄ execute_tools → process_tool_results
-                          → (audio) → transcribe_audio → chat_with_llm
-                                                       → send_email → (audio) → synthesize_tts → END
-                                                       → synthesize_tts → END
-                                                       → END
-```
+| Variável                | Obrigatório  | Descrição                            |
+| ------------------------ | ------------- | -------------------------------------- |
+| `OPENAI_API_KEY`       | **Sim** | GPT-4o-mini, Whisper e TTS             |
+| `GMAIL_USER`           | Não          | Remetente dos e-mails de confirmação |
+| `GMAIL_APP_PASSWORD`   | Não          | App Password do Gmail (16 chars)       |
+| `LANGCHAIN_TRACING_V2` | Não          | `true` para habilitar LangSmith      |
+| `LANGCHAIN_API_KEY`    | Não          | Chave do LangSmith                     |
+| `LANGGRAPH_AUTH_TOKEN` | Não          | Token de autenticação do proxy nginx |
 
-### Chat UI (Agent UI)
+> `PORT`, `DB_PATH` e `API_BASE_URL` já têm valores padrão corretos para Docker Compose.
 
-Interface web em Next.js conectada via `@langchain/langgraph-sdk`:
-
-```bash
-# Acesso após docker compose up
-open http://localhost:3001
-```
-
-Funcionalidades:
-- Chat em texto (streaming de tokens)
-- Gravação de áudio direta pelo microfone (botão 🎙)
-- Upload de arquivo de áudio (botão 📎)
-- Nova conversa (cria novo thread no LangGraph Platform)
-
-### LangGraph Studio (debug local)
-
-Para inspecionar o grafo visualmente durante o desenvolvimento:
-
-```bash
-cd agent
-# Instalar dependências
-pip install -e ".[dev]"
-
-# Iniciar servidor de desenvolvimento
-langgraph dev --host 0.0.0.0 --port 8123
-
-# Abrir Studio no navegador
-open https://smith.langchain.com/studio/?baseUrl=http://localhost:8123
-```
-
-O Studio mostra o estado completo de cada node, mensagens, tool calls e permite replay de execuções com LangSmith.
-
-### Testes do Agente
-
-```bash
-cd agent
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-pytest tests/ -v
-```
-
-Esperado: 28 testes passando (state, api_client, nodes, graph).
-
-### Variáveis de Ambiente do Agente
-
-| Variável | Obrigatório | Descrição |
-|---|---|---|
-| `OPENAI_API_KEY` | Sim | GPT-4o-mini, Whisper, TTS |
-| `API_BASE_URL` | Sim | URL da API REST (default: `http://api:3000`) |
-| `LANGCHAIN_TRACING_V2` | Não | `true` para habilitar LangSmith |
-| `LANGCHAIN_API_KEY` | Se tracing | Chave da API LangSmith |
-| `LANGCHAIN_PROJECT` | Não | Nome do projeto (default: `AgendAI`) |
-| `GMAIL_USER` | Não | E-mail remetente (ex: `clinica@gmail.com`) |
-| `GMAIL_APP_PASSWORD` | Não | App Password do Gmail (16 caracteres) |
-
-### Configurar Gmail para notificações
+### Configurar Gmail (opcional)
 
 1. Conta Google → **Segurança → Verificação em duas etapas** (ativar)
-2. **Segurança → Senhas de app → Selecionar app: Outro → "AgendAI"**
-3. Copiar a senha de 16 caracteres gerada
-4. No `.env`: `GMAIL_USER=clinica@gmail.com` e `GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx`
+2. **Segurança → Senhas de app → Outro → "AgendAI"**
+3. Copiar a senha gerada (16 caracteres)
+4. No `.env`: `GMAIL_USER=seu@gmail.com` e `GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx`
+
+---
+
+## Testes
+
+**API REST** (39 testes Jest — banco `:memory:`, sem Docker):
+
+```bash
+cd api && npm install && npm test
+```
+
+**Agente Python** (70 testes — nodes, tools, grafo, roteamento, estado):
+
+```bash
+cd agent
+uv run pytest
+```
+
+---
+
+## API REST — Endpoints
+
+| Método | Rota                                      | Descrição                                          |
+| ------- | ----------------------------------------- | ---------------------------------------------------- |
+| GET     | `/horarios/disponiveis`                 | Lista horários com dados do médico (cache TTL 60s) |
+| GET     | `/horarios/disponiveis?data=YYYY-MM-DD` | Filtra por data                                      |
+| POST    | `/agendamentos`                         | Cria agendamento e invalida cache                    |
+| PATCH   | `/agendamentos/:id/cancelar`            | Cancela agendamento e invalida cache                 |
+| GET     | `/agendamentos/:id`                     | Detalhe de um agendamento                            |
+| GET     | `/pacientes/:email`                     | Busca paciente por e-mail                            |
+| GET     | `/pagamentos`                           | Valores e formas de pagamento                        |
+| GET     | `/painel`                               | Painel HTML com todos os agendamentos                |
+
+Importe a coleção Postman em `postman/clinica.collection.json` e configure `BASE_URL=http://localhost:3000`.
+
+---
+
+## Banco de dados (seed inicial)
+
+SQLite em `data/clinica.db`. Seed executado automaticamente no boot:
+
+| Paciente       | E-mail          | Telefone    |
+| -------------- | --------------- | ----------- |
+| João Silva    | joao@email.com  | 11999990001 |
+| Maria Santos   | maria@email.com | 11999990002 |
+| Pedro Oliveira | pedro@email.com | 11999990003 |
+| Ana Ferreira   | ana@email.com   | 11999990004 |
+| Lucas Pereira  | lucas@email.com | 11999990005 |
+
+3 médicos (Clínico Geral, Cardiologista, Dermatologista) · 10 horários nos próximos 7 dias.
+
+Resetar banco:
+
+```bash
+docker compose down -v && docker compose up --build -d
+```
+
+---
+
+## Arquitetura do agente
+
+```
+START → detect_input_type
+          ├─ (texto) → chat_with_llm ⇄ execute_tools → process_tool_results
+          │                                                  ├─ send_email
+          │                                                  └─ END
+          └─ (áudio) → transcribe_audio → chat_with_llm → synthesize_tts → END
+```
+
+| Nó                      | Arquivo                                  | Função                                          |
+| ------------------------ | ---------------------------------------- | ------------------------------------------------- |
+| `detect_input_type`    | `agent/nodes/input_detector.py`        | Roteia texto vs. áudio                           |
+| `transcribe_audio`     | `agent/nodes/transcriber.py`           | Whisper STT                                       |
+| `chat_with_llm`        | `agent/nodes/llm_core.py`              | GPT-4o-mini com 5 tools                           |
+| `execute_tools`        | `agent/nodes/tools.py`                 | Chama endpoints da API REST                       |
+| `process_tool_results` | `agent/nodes/tool_result_processor.py` | Detecta agendamento/cancelamento e prepara e-mail |
+| `send_email`           | `agent/nodes/email_sender.py`          | Gmail SMTP (retry 3x via tenacity)                |
+| `synthesize_tts`       | `agent/nodes/tts.py`                   | OpenAI TTS voz alloy (retry 3x)                   |
+
+---
+
+## Diferenciais implementados
+
+| Diferencial              | Detalhe                                                                         |
+| ------------------------ | ------------------------------------------------------------------------------- |
+| Testes API (39)          | Jest + Supertest — 7 suites: rotas, cache, concorrência, validação          |
+| Testes agente (70)       | pytest — nodes, grafo, roteamento, estado, tool result processor               |
+| Function calling         | GPT-4o-mini com 5 funções: horários, agendar, cancelar, pagamentos, paciente |
+| Retry e-mail             | `tenacity` — 3 tentativas com backoff exponencial                            |
+| Retry TTS                | `tenacity` — 3 tentativas em `tts.py`                                      |
+| Cache de disponibilidade | `node-cache` TTL 60s, invalidado em cada escrita                              |
+| Painel de consultas      | `GET /painel` — tabela HTML colorida por status                              |
+| Arquitetura em camadas   | `routes → controllers → services → repositories` com injeção de DB       |
+| Rate limiting            | 100 req/15 min por IP via `express-rate-limit`                                |
+
+---
+
+## Documentação técnica
+
+### Decisões de arquitetura (ADRs)
+
+| ADR                                                   | Decisão                                     |
+| ----------------------------------------------------- | -------------------------------------------- |
+| [ADR-001](docs/adr/ADR-001-node-express.md)              | Node.js + Express para a API REST            |
+| [ADR-002](docs/adr/ADR-002-sqlite-better-sqlite3.md)     | SQLite com better-sqlite3                    |
+| [ADR-003](docs/adr/ADR-003-stateless-conversation.md)    | Conversa stateless no agente                 |
+| [ADR-004](docs/adr/ADR-004-gpt-4o-mini.md)               | GPT-4o-mini como LLM principal               |
+| [ADR-006](docs/adr/ADR-006-openai-whisper.md)            | Whisper para transcrição de áudio         |
+| [ADR-007](docs/adr/ADR-007-openai-tts.md)                | OpenAI TTS para síntese de voz              |
+| [ADR-012](docs/adr/ADR-012-apiclient-singleton-async.md) | API client singleton assíncrono             |
+| [ADR-013](docs/adr/ADR-013-langgraph-dev-server.md)      | LangGraph dev server                         |
+| [ADR-014](docs/adr/ADR-014-checkpointer-inmem.md)        | Checkpointer in-memory                       |
+| [ADR-015](docs/adr/ADR-015-langgraph-vs-n8n.md)          | LangGraph vs N8N — justificativa da escolha |
+| [ADR-016](docs/adr/ADR-016-nginx-reverse-proxy.md)       | nginx como reverse proxy                     |
+| [ADR-017](docs/adr/ADR-017-api-security-tokens.md)       | Segurança por tokens na API                 |
+| [ADR-018](docs/adr/ADR-018-polyglot-node-python.md)      | Stack poliglota Node.js + Python             |
+| [ADR-019](docs/adr/ADR-019-agent-ui.md)                  | Chat UI com Next.js                          |
+| [ADR-020](docs/adr/ADR-020-docker-compose.md)            | Docker Compose para infraestrutura local     |
+| [ADR-021](docs/adr/ADR-021-langsmith-observability.md)   | LangSmith para observabilidade               |
+
+> O ADR-015 explica em detalhe por que LangGraph foi escolhido no lugar de N8N para este projeto.
+
+### Specs e planejamento
+
+| Artefato                      | Arquivo                                                                                   |
+| ----------------------------- | ----------------------------------------------------------------------------------------- |
+| Especificação da UI de chat | [specs/003-professional-chat-ui/spec.md](specs/003-professional-chat-ui/spec.md)             |
+| Plano de implementação      | [specs/003-professional-chat-ui/plan.md](specs/003-professional-chat-ui/plan.md)             |
+| Quickstart detalhado          | [specs/003-professional-chat-ui/quickstart.md](specs/003-professional-chat-ui/quickstart.md) |
+| Modelo de dados               | [specs/003-professional-chat-ui/data-model.md](specs/003-professional-chat-ui/data-model.md) |
+| Tasks de implementação      | [specs/003-professional-chat-ui/tasks.md](specs/003-professional-chat-ui/tasks.md)           |
+
+### Checklist de testes e evidências
+
+Ver [docs/CHECKLIST.md](docs/CHECKLIST.md) — cenários testados manualmente e via suite automatizada com referências a screenshots e gravações de tela.
+
+---
 
 ## Troubleshooting
 
-| Sintoma | Causa | Solução |
-|---|---|---|
-| `connection refused` em `/horarios` | Container API não iniciou | `docker compose logs api` |
-| Agente não responde em :8123 | Container agent falhou | `docker compose logs agent` |
-| E-mails não chegam (agente) | GMAIL_USER/APP_PASSWORD não configurados | Ver seção Gmail acima |
-| Resposta de áudio é texto | TTS falhou | Verificar `OPENAI_API_KEY` e logs do agente |
-| `409 Horário não disponível` | Horário já agendado | Usar ID de `GET /horarios/disponiveis` |
-| `404 Paciente não encontrado` | E-mail não cadastrado | Usar e-mail da tabela de seed acima |
-| UI não conecta ao agente | CORS ou URL errada | Verificar `NEXT_PUBLIC_API_URL=http://localhost:8123` |
+| Sintoma                                 | Causa                                             | Solução                                               |
+| --------------------------------------- | ------------------------------------------------- | ------------------------------------------------------- |
+| `connection refused` em `/horarios` | Container API não iniciou                        | `docker compose logs api`                             |
+| Agente não responde em :8080           | Container agent falhou                            | `docker compose logs agent`                           |
+| E-mails não chegam                     | `GMAIL_USER`/`APP_PASSWORD` não configurados | Ver seção Gmail acima                                 |
+| Resposta de áudio retorna texto        | TTS falhou                                        | Verificar `OPENAI_API_KEY` e logs do agente           |
+| `409 Horário não disponível`       | Horário já agendado                             | Usar ID de `GET /horarios/disponiveis`                |
+| `404 Paciente não encontrado`        | E-mail não cadastrado                            | Usar e-mail da tabela seed acima                        |
+| UI não conecta ao agente               | CORS ou URL errada                                | Verificar `NEXT_PUBLIC_LANGGRAPH_API_URL` no `.env` |
