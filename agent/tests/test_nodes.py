@@ -174,8 +174,6 @@ async def test_transcriber_adds_human_message():
     assert result["messages"][0].content == "Quais horários disponíveis?"
 
 
-# ── tts ───────────────────────────────────────────────────────────────────────
-
 # ── tools: API degradation (TST-03) ───────────────────────────────────────────
 
 @pytest.mark.asyncio
