@@ -76,7 +76,7 @@ export function unknownToPrettyDate(input: unknown): string | undefined {
   try {
     if (
       Object.prototype.toString.call(input) === "[object Date]" ||
-      new Date(input as string)
+      (typeof input === "string" && !isNaN(new Date(input).getTime()))
     ) {
       return format(new Date(input as string), "MM/dd/yyyy hh:mm a");
     }
