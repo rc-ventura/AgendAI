@@ -11,7 +11,7 @@ function escapeHtml(unsafe) {
 function createPainelController({ painelService }) {
   async function renderizar(req, res, next) {
     try {
-      const rows = painelService.listarAgendamentos();
+      const rows = await painelService.listarAgendamentos();
 
       const rows_html = rows.map(r => {
         const statusColor = r.status === 'ativo' ? '#2d7a2d' : '#b22222';

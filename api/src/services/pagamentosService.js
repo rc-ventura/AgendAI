@@ -1,10 +1,10 @@
 function createPagamentosService({ pagamentosRepo }) {
-  function listarPagamentos() {
-    const rows = pagamentosRepo.findAll();
+  async function listarPagamentos() {
+    const rows = await pagamentosRepo.findAll();
     return rows.map(r => ({
       id: r.id,
       descricao: r.descricao,
-      valor: r.valor,
+      valor: Number(r.valor), // pg returns NUMERIC as string — cast to number
       formas: JSON.parse(r.formas),
     }));
   }

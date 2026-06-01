@@ -12,7 +12,7 @@ function createAgendamentosController({ agendamentosService }) {
         return res.status(400).json({ error: 'horario_id deve ser um número inteiro positivo' });
       }
 
-      const result = agendamentosService.criarAgendamento(paciente_email, Number(horario_id));
+      const result = await agendamentosService.criarAgendamento(paciente_email, Number(horario_id));
       res.status(201).json(result);
     } catch (err) {
       next(err);
@@ -24,7 +24,7 @@ function createAgendamentosController({ agendamentosService }) {
       if (!isPositiveInteger(req.params.id)) {
         return res.status(400).json({ error: 'ID inválido' });
       }
-      const result = agendamentosService.buscarAgendamento(Number(req.params.id));
+      const result = await agendamentosService.buscarAgendamento(Number(req.params.id));
       res.json(result);
     } catch (err) {
       next(err);
@@ -36,7 +36,7 @@ function createAgendamentosController({ agendamentosService }) {
       if (!isPositiveInteger(req.params.id)) {
         return res.status(400).json({ error: 'ID inválido' });
       }
-      const result = agendamentosService.cancelarAgendamento(Number(req.params.id));
+      const result = await agendamentosService.cancelarAgendamento(Number(req.params.id));
       res.json(result);
     } catch (err) {
       next(err);
@@ -49,7 +49,7 @@ function createAgendamentosController({ agendamentosService }) {
       if (!email || !isValidEmail(email)) {
         return res.status(400).json({ error: 'Parâmetro email inválido ou ausente' });
       }
-      const result = agendamentosService.listarAgendamentosPaciente(email, status || null);
+      const result = await agendamentosService.listarAgendamentosPaciente(email, status || null);
       res.json(result);
     } catch (err) {
       next(err);

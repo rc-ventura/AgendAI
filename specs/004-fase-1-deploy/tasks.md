@@ -29,7 +29,7 @@ deploy, the persistence guarantee, and the real-DB test gate alike).
 **Purpose**: Obtain managed dependencies and swap the data-layer dependency.
 
 - [ ] T001 Provision managed dependencies (record connection strings into a local untracked `.env`): Neon project with two databases `agendai_app` → `DATABASE_URL` and `agendai_lg` → `DATABASE_URI`; Upstash Redis → `REDIS_URI`; LangSmith Developer → `LANGSMITH_API_KEY` (license) + `LANGCHAIN_API_KEY` (tracing). Reference `specs/004-fase-1-deploy/contracts/render-blueprint.md`
-- [ ] T002 [P] In `api/package.json`, remove `better-sqlite3` and add `pg` (`^8`); keep all other deps
+- [X] T002 [P] In `api/package.json`, remove `better-sqlite3` and add `pg` (`^8`); keep all other deps
 - [ ] T003 [P] Update `.env.example` to add `DATABASE_URL`, `DATABASE_URI`, `REDIS_URI`, `LANGSMITH_API_KEY` and document the new topology; keep existing keys (`OPENAI_API_KEY`, `LANGCHAIN_*`, `GMAIL_*`, `LANGGRAPH_AUTH_TOKEN`, `API_BASE_URL`)
 - [ ] T004 [P] Confirm `.env` is gitignored (it is, line 2) and add a local Postgres for dev/test by appending `postgres:16` + `redis` services to `docker-compose.yml` (dev-parity only; expose Postgres on `5432` locally for the test runner)
 
@@ -48,32 +48,32 @@ deploy, the persistence guarantee, and the real-DB test gate alike).
 **Contract**: Apply `specs/004-fase-1-deploy/contracts/data-migration.md` mechanically. The HTTP
 status codes and JSON shapes MUST NOT change.
 
-- [ ] T005 Rewrite `api/src/db/schema.sql` to Postgres dialect per data-model.md §A: `INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY`, keep `horarios.data_hora` as `TEXT` and `horarios.disponivel` as `SMALLINT DEFAULT 1`, `agendamentos.criado_em` as `TIMESTAMPTZ DEFAULT now()`, `pagamentos.valor` as `NUMERIC(10,2)`; keep all `CREATE TABLE IF NOT EXISTS` (idempotent)
-- [ ] T006 Rewrite `api/src/db/connection.js`: replace `better-sqlite3` with `pg.Pool`; export `getPool()` (singleton on `DATABASE_URL`, fail-fast if missing), `createConnection(connStr)` with **conditional SSL** (enable `{ rejectUnauthorized: false }` only for remote/managed hosts — Neon; disable for local/CI Postgres and honor `PGSSLMODE=disable`, per data-migration.md §2), and `async initSchema(pool)` that runs `schema.sql`
-- [ ] T007 Rewrite `api/src/db/seed.js` to `async function seed(pool)`: count-guard via `SELECT count(*)::int AS n FROM medicos`, wrap inserts in a `BEGIN/COMMIT` client transaction, use `INSERT … RETURNING id`, preserve the exact seed data and the local-time `formatLocalDate` weekday logic
-- [ ] T008 [P] Migrate `api/src/repositories/horariosRepository.js` to async + `$n` + optional `exec = pool`; `claimIfAvailable` returns result (`rowCount`); `findAvailableByDate` uses `left(h.data_hora,10) = $1`
-- [ ] T009 [P] Migrate `api/src/repositories/agendamentosRepository.js` to async + `$n` + optional `exec`; `create` uses `RETURNING id`; read `.rows`/`.rows[0]`
-- [ ] T010 [P] Migrate `api/src/repositories/pacientesRepository.js` to async + `$n` + optional `exec`
-- [ ] T011 [P] Migrate `api/src/repositories/pagamentosRepository.js` to async + `$n` + optional `exec`; **explicitly cast `valor` to Number** on read (`pg` returns `NUMERIC` as a string) so the JSON contract stays numeric (research D4)
-- [ ] T012 [P] Migrate `api/src/repositories/painelRepository.js` to async + `$n` + optional `exec`
-- [ ] T013 Migrate `api/src/services/agendamentosService.js`: `async`; replace `db.transaction(() => …)` with pooled-client `BEGIN/COMMIT/ROLLBACK` for `criarAgendamento` and `cancelarAgendamento` per data-migration.md §4; `claimed.rowCount === 0` → 409; `cache.delByPrefix('horarios')` stays **after** commit
-- [ ] T014 [P] Migrate `api/src/services/horariosService.js` to async (await repo calls)
-- [ ] T015 [P] Migrate `api/src/services/pacientesService.js` to async
-- [ ] T016 [P] Migrate `api/src/services/pagamentosService.js` to async
-- [ ] T017 [P] Migrate `api/src/services/painelService.js` to async
-- [ ] T018 Add `await` before every service call in all controllers: `api/src/controllers/{agendamentos,horarios,pacientes,pagamentos,painel}Controller.js` (already `async function`; keep `next(err)` flow)
-- [ ] T019 Update `api/src/app.js` (`createApp(pool)`) and `api/src/server.js` (async startup: `await initSchema(pool)` then `await seed(pool)` **before** `app.listen`; fail-fast `process.exit(1)` on startup error). Verify the fail-fast path: starting with `DATABASE_URL` unset exits with a clear message, not a hang or partial boot (FR-016)
-- [ ] T020 Migrate the test harness in `api/tests/setup.js`: async `createTestApp()` against `DATABASE_URL`, add `resetDb(pool)` (DROP CASCADE → `initSchema` → `seed`), `cache.clear()`, return `{ app, pool }`; close pool in shared `afterAll`
-- [ ] T021 [P] Update `api/tests/agendamentos.test.js` to `await createTestApp()` in `beforeEach`; assertions unchanged
-- [ ] T022 [P] Update `api/tests/horarios.test.js` to async setup
-- [ ] T023 [P] Update `api/tests/pacientes.test.js` to async setup
-- [ ] T024 [P] Update `api/tests/pagamentos.test.js` to async setup; add an assertion that `valor` is a `number` (not a string) to guard the `NUMERIC` cast from T011
-- [ ] T025 [P] Update `api/tests/cache.test.js` to async setup
-- [ ] T026 [P] Update `api/tests/validation.test.js` to async setup
-- [ ] T027 [P] Update `api/tests/concurrency.test.js` to async setup; confirm the Postgres row-lock path still yields exactly `[201, 409]`
-- [ ] T028 Run `cd api && DATABASE_URL=… npm test` and make all **39 Jest tests pass** against real Postgres; grep `api/src` to confirm no `better-sqlite3` import and no `?`/`.prepare(`/`.get(`/`.all(`/`.run(` remain
+- [X] T005 Rewrite `api/src/db/schema.sql` to Postgres dialect per data-model.md §A: `INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY`, keep `horarios.data_hora` as `TEXT` and `horarios.disponivel` as `SMALLINT DEFAULT 1`, `agendamentos.criado_em` as `TIMESTAMPTZ DEFAULT now()`, `pagamentos.valor` as `NUMERIC(10,2)`; keep all `CREATE TABLE IF NOT EXISTS` (idempotent)
+- [X] T006 Rewrite `api/src/db/connection.js`: replace `better-sqlite3` with `pg.Pool`; export `getPool()` (singleton on `DATABASE_URL`, fail-fast if missing), `createConnection(connStr)` with **conditional SSL** (enable `{ rejectUnauthorized: false }` only for remote/managed hosts — Neon; disable for local/CI Postgres and honor `PGSSLMODE=disable`, per data-migration.md §2), and `async initSchema(pool)` that runs `schema.sql`
+- [X] T007 Rewrite `api/src/db/seed.js` to `async function seed(pool)`: count-guard via `SELECT count(*)::int AS n FROM medicos`, wrap inserts in a `BEGIN/COMMIT` client transaction, use `INSERT … RETURNING id`, preserve the exact seed data and the local-time `formatLocalDate` weekday logic
+- [X] T008 [P] Migrate `api/src/repositories/horariosRepository.js` to async + `$n` + optional `exec = pool`; `claimIfAvailable` returns result (`rowCount`); `findAvailableByDate` uses `left(h.data_hora,10) = $1`
+- [X] T009 [P] Migrate `api/src/repositories/agendamentosRepository.js` to async + `$n` + optional `exec`; `create` uses `RETURNING id`; read `.rows`/`.rows[0]`
+- [X] T010 [P] Migrate `api/src/repositories/pacientesRepository.js` to async + `$n` + optional `exec`
+- [X] T011 [P] Migrate `api/src/repositories/pagamentosRepository.js` to async + `$n` + optional `exec`; **explicitly cast `valor` to Number** on read (`pg` returns `NUMERIC` as a string) so the JSON contract stays numeric (research D4)
+- [X] T012 [P] Migrate `api/src/repositories/painelRepository.js` to async + `$n` + optional `exec`
+- [X] T013 Migrate `api/src/services/agendamentosService.js`: `async`; replace `db.transaction(() => …)` with pooled-client `BEGIN/COMMIT/ROLLBACK` for `criarAgendamento` and `cancelarAgendamento` per data-migration.md §4; `claimed.rowCount === 0` → 409; `cache.delByPrefix('horarios')` stays **after** commit
+- [X] T014 [P] Migrate `api/src/services/horariosService.js` to async (await repo calls)
+- [X] T015 [P] Migrate `api/src/services/pacientesService.js` to async
+- [X] T016 [P] Migrate `api/src/services/pagamentosService.js` to async
+- [X] T017 [P] Migrate `api/src/services/painelService.js` to async
+- [X] T018 Add `await` before every service call in all controllers: `api/src/controllers/{agendamentos,horarios,pacientes,pagamentos,painel}Controller.js` (already `async function`; keep `next(err)` flow)
+- [X] T019 Update `api/src/app.js` (`createApp(pool)`) and `api/src/server.js` (async startup: `await initSchema(pool)` then `await seed(pool)` **before** `app.listen`; fail-fast `process.exit(1)` on startup error). Verify the fail-fast path: starting with `DATABASE_URL` unset exits with a clear message, not a hang or partial boot (FR-016)
+- [X] T020 Migrate the test harness in `api/tests/setup.js`: async `createTestApp()` against `DATABASE_URL`, add `resetDb(pool)` (DROP CASCADE → `initSchema` → `seed`), `cache.clear()`, return `{ app, pool }`; close pool in shared `afterAll`
+- [X] T021 [P] Update `api/tests/agendamentos.test.js` to `await createTestApp()` in `beforeEach`; assertions unchanged
+- [X] T022 [P] Update `api/tests/horarios.test.js` to async setup
+- [X] T023 [P] Update `api/tests/pacientes.test.js` to async setup
+- [X] T024 [P] Update `api/tests/pagamentos.test.js` to async setup; add an assertion that `valor` is a `number` (not a string) to guard the `NUMERIC` cast from T011
+- [X] T025 [P] Update `api/tests/cache.test.js` to async setup
+- [X] T026 [P] Update `api/tests/validation.test.js` to async setup
+- [X] T027 [P] Update `api/tests/concurrency.test.js` to async setup; confirm the Postgres row-lock path still yields exactly `[201, 409]`
+- [X] T028 Run `cd api && DATABASE_URL=… npm test` and make all **39 Jest tests pass** against real Postgres; grep `api/src` to confirm no `better-sqlite3` import and no `?`/`.prepare(`/`.get(`/`.all(`/`.run(` remain
 
-- [ ] T028b [P] Confirm the agent baseline is unaffected by the migration: `cd agent && uv run pytest --tb=short` → all 70 tests pass (the migration touches only the API; this is a sanity check before the CI gate relies on it)
+- [X] T028b [P] Confirm the agent baseline is unaffected by the migration: `cd agent && uv run pytest --tb=short` → all 70 tests pass (the migration touches only the API; this is a sanity check before the CI gate relies on it)
 
 **Checkpoint**: API runs on Postgres locally; full Jest suite (39) + agent suite (70) green. Foundation ready.
 

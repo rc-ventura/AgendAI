@@ -1,5 +1,5 @@
-function createAgendamentosRepository(db) {
-  const selectAgendamento = db.prepare(`
+function createAgendamentosRepository(pool) {
+  const SELECT_AGENDAMENTO = `
     SELECT a.id, a.status, a.criado_em,
            p.id as pac_id, p.nome as pac_nome, p.email as pac_email,
            h.id as hor_id, h.data_hora,
@@ -8,28 +8,33 @@ function createAgendamentosRepository(db) {
     JOIN pacientes p ON p.id = a.paciente_id
     JOIN horarios h ON h.id = a.horario_id
     JOIN medicos m ON m.id = h.medico_id
-    WHERE a.id = ?
-  `);
+    WHERE a.id = $1
+  `;
 
-  function findById(id) {
-    return selectAgendamento.get(id);
+  async function findById(id, exec = pool) {
+    const { rows } = await exec.query(SELECT_AGENDAMENTO, [id]);
+    return rows[0];
   }
 
-  function findByIdWithStatus(id) {
-    return db.prepare('SELECT id, status, horario_id FROM agendamentos WHERE id = ?').get(id);
+  async function findByIdWithStatus(id, exec = pool) {
+    const { rows } = await exec.query(
+      'SELECT id, status, horario_id FROM agendamentos WHERE id = $1', [id]
+    );
+    return rows[0];
   }
 
-  function create(pacienteId, horarioId, status = 'ativo') {
-    return db.prepare(
-      'INSERT INTO agendamentos (paciente_id, horario_id, status) VALUES (?, ?, ?)'
-    ).run(pacienteId, horarioId, status);
+  async function create(pacienteId, horarioId, status = 'ativo', exec = pool) {
+    return exec.query(
+      'INSERT INTO agendamentos (paciente_id, horario_id, status) VALUES ($1, $2, $3) RETURNING id',
+      [pacienteId, horarioId, status]
+    );
   }
 
-  function updateStatus(id, status) {
-    return db.prepare("UPDATE agendamentos SET status = ? WHERE id = ?").run(status, id);
+  async function updateStatus(id, status, exec = pool) {
+    return exec.query('UPDATE agendamentos SET status = $1 WHERE id = $2', [status, id]);
   }
 
-  function findByPacienteEmail(email, status = null) {
+  async function findByPacienteEmail(email, status = null, exec = pool) {
     const base = `
       SELECT a.id, a.status, a.criado_em,
              p.id as pac_id, p.nome as pac_nome, p.email as pac_email,
@@ -39,12 +44,14 @@ function createAgendamentosRepository(db) {
       JOIN pacientes p ON p.id = a.paciente_id
       JOIN horarios h ON h.id = a.horario_id
       JOIN medicos m ON m.id = h.medico_id
-      WHERE p.email = ?
+      WHERE p.email = $1
     `;
     if (status) {
-      return db.prepare(base + ' AND a.status = ? ORDER BY h.data_hora ASC').all(email, status);
+      const { rows } = await exec.query(base + ' AND a.status = $2 ORDER BY h.data_hora ASC', [email, status]);
+      return rows;
     }
-    return db.prepare(base + ' ORDER BY h.data_hora ASC').all(email);
+    const { rows } = await exec.query(base + ' ORDER BY h.data_hora ASC', [email]);
+    return rows;
   }
 
   return { findById, findByIdWithStatus, create, updateStatus, findByPacienteEmail };

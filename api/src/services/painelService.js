@@ -1,5 +1,5 @@
 function createPainelService({ painelRepo }) {
-  function listarAgendamentos() {
+  async function listarAgendamentos() {
     return painelRepo.findAllAgendamentos();
   }
 

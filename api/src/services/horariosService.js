@@ -1,15 +1,15 @@
 const cache = require('../cache');
 
 function createHorariosService({ horariosRepo }) {
-  function listarDisponiveis(data) {
+  async function listarDisponiveis(data) {
     const cacheKey = data ? `horarios:${data}` : 'horarios';
 
     const cached = cache.get(cacheKey);
     if (cached) return cached;
 
     const rows = data
-      ? horariosRepo.findAvailableByDate(data)
-      : horariosRepo.findAvailable();
+      ? await horariosRepo.findAvailableByDate(data)
+      : await horariosRepo.findAvailable();
 
     const result = rows.map(r => ({
       id: r.id,

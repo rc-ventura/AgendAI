@@ -1,6 +1,6 @@
 function createPacientesService({ pacientesRepo }) {
-  function buscarPorEmail(email) {
-    const paciente = pacientesRepo.findByEmail(email);
+  async function buscarPorEmail(email) {
+    const paciente = await pacientesRepo.findByEmail(email);
     if (!paciente) {
       const error = new Error('Paciente não encontrado');
       error.statusCode = 404;

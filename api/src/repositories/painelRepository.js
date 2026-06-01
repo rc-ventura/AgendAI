@@ -1,6 +1,6 @@
-function createPainelRepository(db) {
-  function findAllAgendamentos() {
-    return db.prepare(`
+function createPainelRepository(pool) {
+  async function findAllAgendamentos(exec = pool) {
+    const { rows } = await exec.query(`
       SELECT a.id, a.status, a.criado_em,
              p.nome as paciente_nome, p.email as paciente_email,
              m.nome as medico_nome, m.especialidade,
@@ -10,7 +10,8 @@ function createPainelRepository(db) {
       JOIN horarios h ON h.id = a.horario_id
       JOIN medicos m ON m.id = h.medico_id
       ORDER BY h.data_hora
-    `).all();
+    `);
+    return rows;
   }
 
   return { findAllAgendamentos };
