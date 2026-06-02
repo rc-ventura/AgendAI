@@ -23,7 +23,7 @@ services:
       - key: LANGGRAPH_AUTH_TOKEN
         sync: false
     healthCheckPath: /health
-    autoDeployTrigger: off
+    autoDeploy: false
 
   # ── API Express (Node.js) ────────────────────────────────────────────────────
   - type: web
@@ -38,7 +38,7 @@ services:
       - key: DATABASE_URL
         sync: false   # Neon: postgres://...@.../agendai_app?sslmode=require
     healthCheckPath: /horarios/disponiveis
-    autoDeployTrigger: off
+    autoDeploy: false
 
   # ── LangGraph Server ─────────────────────────────────────────────────────────
   # Imagem publicada no GHCR pelo deploy.yml via: langgraph build
@@ -75,7 +75,8 @@ services:
         sync: false
       - key: GMAIL_APP_PASSWORD
         sync: false
-    autoDeployTrigger: off
+    healthCheckPath: /ok
+    autoDeploy: false
 
   # ── Chat UI Next.js ──────────────────────────────────────────────────────────
   - type: web
@@ -91,4 +92,4 @@ services:
         value: agendai_agent
       - key: NEXT_PUBLIC_LANGGRAPH_API_KEY
         sync: false              # mesmo valor do LANGGRAPH_AUTH_TOKEN
-    autoDeployTrigger: off
+    autoDeploy: false
