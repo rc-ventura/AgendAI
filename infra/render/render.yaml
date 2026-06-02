@@ -15,6 +15,7 @@ services:
   # ── nginx — ponto de entrada principal para o usuário ────────────────────────
   - type: web
     name: agendai-nginx
+    plan: free
     runtime: docker
     dockerfilePath: ./nginx/Dockerfile
     dockerContext: ./nginx
@@ -27,6 +28,7 @@ services:
   # ── API Express (Node.js) ────────────────────────────────────────────────────
   - type: web
     name: agendai-api
+    plan: free
     runtime: docker
     dockerfilePath: ./api/Dockerfile
     dockerContext: ./api
@@ -40,11 +42,16 @@ services:
 
   # ── LangGraph Server ─────────────────────────────────────────────────────────
   # Imagem publicada no GHCR pelo deploy.yml via: langgraph build
+  # registryCredential: crie a credencial GHCR no Render Dashboard antes do deploy
+  #   Settings → Registry Credentials → name: ghcr-rc-ventura
+  #   username: rc-ventura  |  token: GitHub PAT com read:packages
   - type: web
     name: agendai-langgraph
+    plan: free
     runtime: image
     image:
       url: ghcr.io/rc-ventura/agendai-agent:latest
+      creds: ghcr-rc-ventura
     envVars:
       - key: PORT
         value: "8123"
@@ -73,6 +80,7 @@ services:
   # ── Chat UI Next.js ──────────────────────────────────────────────────────────
   - type: web
     name: agendai-ui
+    plan: free
     runtime: docker
     dockerfilePath: ./agent-ui-pro/Dockerfile
     dockerContext: ./agent-ui-pro
