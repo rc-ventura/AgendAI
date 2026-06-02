@@ -1,16 +1,15 @@
 const request = require('supertest');
-const { createTestApp } = require('./setup');
+const { createTestApp, closeTestPool } = require('./setup');
 const cache = require('../src/cache');
 
 let pool;
 
 beforeEach(async () => {
   cache.clear();
-  // pool is released per-test via afterAll if the test needs direct DB access
 });
 
 afterAll(async () => {
-  if (pool) await pool.end();
+  await closeTestPool();
 });
 
 describe('Cache de horários disponíveis', () => {

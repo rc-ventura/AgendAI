@@ -1,5 +1,5 @@
 const request = require('supertest');
-const { createTestApp } = require('./setup');
+const { createTestApp, closeTestPool } = require('./setup');
 
 let app, pool;
 
@@ -8,7 +8,7 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
-  if (pool) await pool.end();
+  await closeTestPool();
 });
 
 describe('GET /horarios/disponiveis', () => {

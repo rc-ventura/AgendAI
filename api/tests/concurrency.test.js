@@ -1,10 +1,10 @@
 const request = require('supertest');
-const { createTestApp } = require('./setup');
+const { createTestApp, closeTestPool } = require('./setup');
 
 let pool;
 
 afterAll(async () => {
-  if (pool) await pool.end();
+  await closeTestPool();
 });
 
 // Postgres row-level locking serialises competing UPDATE … WHERE disponivel=1 on the same
