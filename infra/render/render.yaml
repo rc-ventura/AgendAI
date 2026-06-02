@@ -1,18 +1,18 @@
 version: "1"
 
 # AgendAI — Render Blueprint (Fase 1)
-# Único serviço público: nginx.
-# api, langgraph-server e agent-ui-pro são Private Services (sem URL pública).
+# Todos os serviços são type:web (free tier — pserv requer plano pago).
+# nginx é o único ponto de entrada recomendado para o usuário final.
+# api e agent-ui-pro têm URLs públicas mas são acessados internamente pelo nginx.
 #
 # Antes de fazer deploy:
 # 1. Crie os recursos externos (ver README.md nesta pasta)
 # 2. Defina as env vars marcadas com sync: false no Render Dashboard
-# 3. Substitua GITHUB_OWNER abaixo pelo seu usuário GitHub
-# 4. O deploy é disparado automaticamente pelo .github/workflows/deploy.yml
+# 3. O deploy é disparado automaticamente pelo .github/workflows/deploy.yml
 
 services:
 
-  # ── nginx — ÚNICO ponto de entrada público ──────────────────────────────────
+  # ── nginx — ponto de entrada principal para o usuário ────────────────────────
   - type: web
     name: agendai-nginx
     runtime: docker
@@ -22,10 +22,10 @@ services:
       - key: LANGGRAPH_AUTH_TOKEN
         sync: false
     healthCheckPath: /health
-    autoDeployTrigger: off  # controlado pelo deploy.yml (webhook)
+    autoDeployTrigger: off
 
-  # ── API Express (Node.js) — Private Service ──────────────────────────────────
-  - type: pserv
+  # ── API Express (Node.js) ────────────────────────────────────────────────────
+  - type: web
     name: agendai-api
     runtime: docker
     dockerfilePath: ./api/Dockerfile
@@ -35,12 +35,12 @@ services:
         value: "3000"
       - key: DATABASE_URL
         sync: false   # Neon: postgres://...@.../agendai_app?sslmode=require
+    healthCheckPath: /horarios/disponiveis
     autoDeployTrigger: off
 
-  # ── LangGraph Server — Private Service ───────────────────────────────────────
+  # ── LangGraph Server ─────────────────────────────────────────────────────────
   # Imagem publicada no GHCR pelo deploy.yml via: langgraph build
-  # SUBSTITUA GITHUB_OWNER pelo seu usuário GitHub antes do primeiro deploy
-  - type: pserv
+  - type: web
     name: agendai-langgraph
     runtime: image
     image:
@@ -63,24 +63,22 @@ services:
       - key: OPENAI_API_KEY
         sync: false
       - key: API_BASE_URL
-        value: http://agendai-api:3000   # hostname = nome do serviço na rede privada do Render
+        value: http://agendai-api:3000   # hostname interno do Render (mesmo nome do serviço)
       - key: GMAIL_USER
         sync: false
       - key: GMAIL_APP_PASSWORD
         sync: false
     autoDeployTrigger: off
 
-  # ── Chat UI Next.js — Private Service (servida pelo nginx via location /) ────
-  # NEXT_PUBLIC_* são ARGs no Dockerfile (baked no build).
-  # O Render passa todos os envVars como --build-arg automaticamente para serviços Docker.
-  - type: pserv
+  # ── Chat UI Next.js ──────────────────────────────────────────────────────────
+  - type: web
     name: agendai-ui
     runtime: docker
     dockerfilePath: ./agent-ui-pro/Dockerfile
     dockerContext: ./agent-ui-pro
     envVars:
       - key: NEXT_PUBLIC_API_URL
-        value: ""                # vazio = same-origin (nginx serve a UI no mesmo domínio)
+        value: ""                # vazio = same-origin (nginx serve a UI)
       - key: NEXT_PUBLIC_ASSISTANT_ID
         value: agendai_agent
       - key: NEXT_PUBLIC_LANGGRAPH_API_KEY
