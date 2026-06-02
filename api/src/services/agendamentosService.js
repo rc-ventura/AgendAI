@@ -21,6 +21,7 @@ function createAgendamentosService(pool, { agendamentosRepo, pacientesRepo, hora
     }
 
     const client = await pool.connect();
+    let newId;
     try {
       await client.query('BEGIN');
 
@@ -34,18 +35,20 @@ function createAgendamentosService(pool, { agendamentosRepo, pacientesRepo, hora
 
       const ins = await agendamentosRepo.create(paciente.id, horarioId, 'ativo', client);
       await client.query('COMMIT');
-
-      // Invalidate cache after successful commit
-      cache.delByPrefix('horarios');
-
-      const row = await agendamentosRepo.findById(ins.rows[0].id);
-      return formatAgendamento(row);
+      newId = ins.rows[0].id;
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
     } finally {
       client.release();
     }
+
+    // Post-commit work runs on the pool (autocommit), not the txn client, so it
+    // must sit outside the try/catch — otherwise a throw here would trigger a
+    // ROLLBACK on an already-committed transaction.
+    cache.delByPrefix('horarios');
+    const row = await agendamentosRepo.findById(newId);
+    return formatAgendamento(row);
   }
 
   async function buscarAgendamento(id) {
@@ -77,17 +80,17 @@ function createAgendamentosService(pool, { agendamentosRepo, pacientesRepo, hora
       await agendamentosRepo.updateStatus(id, 'cancelado', client);
       await horariosRepo.updateDisponivel(agendamento.horario_id, 1, client);
       await client.query('COMMIT');
-
-      cache.delByPrefix('horarios');
-
-      const row = await agendamentosRepo.findById(id);
-      return formatAgendamento(row);
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
     } finally {
       client.release();
     }
+
+    // Post-commit: see note in criarAgendamento.
+    cache.delByPrefix('horarios');
+    const row = await agendamentosRepo.findById(id);
+    return formatAgendamento(row);
   }
 
   async function listarAgendamentosPaciente(email, status = null) {
