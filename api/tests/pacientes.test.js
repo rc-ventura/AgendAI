@@ -1,10 +1,14 @@
 const request = require('supertest');
-const { createTestApp } = require('./setup');
+const { createTestApp, closeTestPool } = require('./setup');
 
-let app, db;
+let app, pool;
 
-beforeEach(() => {
-  ({ app, db } = createTestApp());
+beforeEach(async () => {
+  ({ app, pool } = await createTestApp());
+});
+
+afterAll(async () => {
+  await closeTestPool();
 });
 
 describe('GET /pacientes/:email', () => {

@@ -1,10 +1,14 @@
 const request = require('supertest');
-const { createTestApp } = require('./setup');
+const { createTestApp, closeTestPool } = require('./setup');
 
-let app, db;
+let app, pool;
 
-beforeEach(() => {
-  ({ app, db } = createTestApp());
+beforeEach(async () => {
+  ({ app, pool } = await createTestApp());
+});
+
+afterAll(async () => {
+  await closeTestPool();
 });
 
 function getFirstAvailableHorario(app) {
@@ -36,9 +40,8 @@ describe('POST /agendamentos', () => {
   });
 
   it('retorna 409 para horário já ocupado', async () => {
-    // horario_id 1 e 2 estão ocupados pelo seed
-    const allHorarios = db.prepare('SELECT id FROM horarios WHERE disponivel=0').all();
-    const ocupadoId = allHorarios[0].id;
+    const { rows } = await pool.query('SELECT id FROM horarios WHERE disponivel = 0');
+    const ocupadoId = rows[0].id;
 
     const res = await request(app)
       .post('/agendamentos')
@@ -62,11 +65,11 @@ describe('POST /agendamentos', () => {
 
 describe('GET /agendamentos/:id', () => {
   it('retorna agendamento existente', async () => {
-    const agendamento = db.prepare('SELECT id FROM agendamentos LIMIT 1').get();
-    const res = await request(app).get(`/agendamentos/${agendamento.id}`);
+    const { rows } = await pool.query('SELECT id FROM agendamentos LIMIT 1');
+    const res = await request(app).get(`/agendamentos/${rows[0].id}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveProperty('id', agendamento.id);
+    expect(res.body).toHaveProperty('id', rows[0].id);
     expect(res.body).toHaveProperty('status');
     expect(res.body).toHaveProperty('paciente');
     expect(res.body).toHaveProperty('horario');
@@ -125,11 +128,11 @@ describe('GET /agendamentos', () => {
 
 describe('PATCH /agendamentos/:id/cancelar', () => {
   it('cancela agendamento ativo — retorna 200 com status cancelado', async () => {
-    const agendamento = db.prepare("SELECT id FROM agendamentos WHERE status='ativo' LIMIT 1").get();
-    const res = await request(app).patch(`/agendamentos/${agendamento.id}/cancelar`);
+    const { rows } = await pool.query("SELECT id FROM agendamentos WHERE status = 'ativo' LIMIT 1");
+    const res = await request(app).patch(`/agendamentos/${rows[0].id}/cancelar`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveProperty('id', agendamento.id);
+    expect(res.body).toHaveProperty('id', rows[0].id);
     expect(res.body).toHaveProperty('status', 'cancelado');
   });
 
@@ -140,20 +143,20 @@ describe('PATCH /agendamentos/:id/cancelar', () => {
   });
 
   it('retorna 400 para agendamento já cancelado', async () => {
-    const agendamento = db.prepare("SELECT id FROM agendamentos WHERE status='ativo' LIMIT 1").get();
-    await request(app).patch(`/agendamentos/${agendamento.id}/cancelar`);
-    const res = await request(app).patch(`/agendamentos/${agendamento.id}/cancelar`);
+    const { rows } = await pool.query("SELECT id FROM agendamentos WHERE status = 'ativo' LIMIT 1");
+    await request(app).patch(`/agendamentos/${rows[0].id}/cancelar`);
+    const res = await request(app).patch(`/agendamentos/${rows[0].id}/cancelar`);
 
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: 'Agendamento já está cancelado' });
   });
 
   it('horário fica disponível após cancelamento', async () => {
-    const agendamento = db.prepare("SELECT id, horario_id FROM agendamentos WHERE status='ativo' LIMIT 1").get();
-    await request(app).patch(`/agendamentos/${agendamento.id}/cancelar`);
+    const { rows } = await pool.query("SELECT id, horario_id FROM agendamentos WHERE status = 'ativo' LIMIT 1");
+    await request(app).patch(`/agendamentos/${rows[0].id}/cancelar`);
 
     const horarios = await request(app).get('/horarios/disponiveis');
     const ids = horarios.body.map(h => h.id);
-    expect(ids).toContain(agendamento.horario_id);
+    expect(ids).toContain(rows[0].horario_id);
   });
 });

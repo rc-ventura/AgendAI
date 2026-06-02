@@ -1,0 +1,125 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  # Defense-in-depth: re-run the test suites in the deploy workflow itself,
+  # not just rely on branch protection. A force-push to main, a misconfigured
+  # protection rule, or an admin bypass cannot ship a broken build to prod.
+  test:
+    name: Verify tests pass
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: agendai
+          POSTGRES_PASSWORD: agendai
+          POSTGRES_DB: agendai_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: api/package-lock.json
+
+      - name: Install API dependencies
+        run: cd api && npm ci
+
+      - name: Run API tests
+        env:
+          DATABASE_URL: postgres://agendai:agendai@localhost:5432/agendai_test
+          NODE_ENV: test
+        run: cd api && npm test
+
+      - uses: astral-sh/setup-uv@v3
+
+      - name: Run agent tests
+        env:
+          OPENAI_API_KEY: dummy
+        run: cd agent && uv run --extra dev pytest --tb=short
+
+  deploy:
+    name: Build → GHCR → Render
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # GHCR push
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Agente (LangGraph Server) ──────────────────────────────────────────
+      # langgraph build produz a imagem oficial langchain/langgraph-server com
+      # o grafo embutido. Requer LANGSMITH_API_KEY para o build.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install langgraph-cli
+        run: pip install -U "langgraph-cli"
+
+      - name: Build agent image (langgraph build)
+        env:
+          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+        run: |
+          cd agent
+          langgraph build \
+            -t ghcr.io/${{ github.repository_owner }}/agendai-agent:latest \
+            --no-pull
+
+      - name: Push agent image
+        run: docker push ghcr.io/${{ github.repository_owner }}/agendai-agent:latest
+
+      # ── API, nginx (imagens Docker simples) ───────────────────────────────
+      - name: Build & push api
+        uses: docker/build-push-action@v5
+        with:
+          context: ./api
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/agendai-api:latest
+
+      - name: Build & push nginx
+        uses: docker/build-push-action@v5
+        with:
+          context: ./nginx
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/agendai-nginx:latest
+
+      # ── Chat UI (build args baked no build time) ──────────────────────────
+      - name: Build & push agent-ui-pro
+        uses: docker/build-push-action@v5
+        with:
+          context: ./agent-ui-pro
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/agendai-ui:latest
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL }}
+            NEXT_PUBLIC_ASSISTANT_ID=agendai_agent
+            NEXT_PUBLIC_LANGGRAPH_API_KEY=${{ secrets.LANGGRAPH_AUTH_TOKEN }}
+
+      # ── Disparar deploy no Render ─────────────────────────────────────────
+      - name: Trigger Render deploy
+        run: curl -fsSL -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}"

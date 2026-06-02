@@ -112,9 +112,15 @@ async def buscar_agendamentos_paciente(email: str, status: str | None = None) ->
 
 @tool
 async def buscar_paciente(email: str) -> str:
-    """Busca os dados de um paciente pelo e-mail.
+    """Busca os dados de um paciente pelo e-mail cadastrado (deve conter '@').
     Use para confirmar se o e-mail está cadastrado antes de criar um agendamento.
+    Se o parâmetro não parecer um e-mail válido, retorne uma mensagem pedindo o e-mail correto.
     """
+    if "@" not in email:
+        return (
+            f"'{email}' não é um endereço de e-mail válido. "
+            "Por favor, peça ao paciente o e-mail completo (ex: nome@dominio.com)."
+        )
     client = get_client()
     result = await client.buscar_paciente(email)
     if "erro" in result:

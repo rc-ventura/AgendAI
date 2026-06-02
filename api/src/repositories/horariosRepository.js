@@ -1,38 +1,41 @@
-function createHorariosRepository(db) {
-  function findAvailable() {
-    return db.prepare(`
+function createHorariosRepository(pool) {
+  async function findAvailable(exec = pool) {
+    const { rows } = await exec.query(`
       SELECT h.id, h.data_hora, h.disponivel,
              m.id as medico_id, m.nome as medico_nome, m.especialidade
       FROM horarios h
       JOIN medicos m ON m.id = h.medico_id
       WHERE h.disponivel = 1
       ORDER BY h.data_hora
-    `).all();
+    `);
+    return rows;
   }
 
-  function findAvailableByDate(data) {
-    return db.prepare(`
+  async function findAvailableByDate(data, exec = pool) {
+    const { rows } = await exec.query(`
       SELECT h.id, h.data_hora, h.disponivel,
              m.id as medico_id, m.nome as medico_nome, m.especialidade
       FROM horarios h
       JOIN medicos m ON m.id = h.medico_id
-      WHERE h.disponivel = 1 AND date(h.data_hora) = ?
+      WHERE h.disponivel = 1 AND left(h.data_hora, 10) = $1
       ORDER BY h.data_hora
-    `).all(data);
+    `, [data]);
+    return rows;
   }
 
-  function findById(id) {
-    return db.prepare('SELECT id, disponivel FROM horarios WHERE id = ?').get(id);
+  async function findById(id, exec = pool) {
+    const { rows } = await exec.query('SELECT id, disponivel FROM horarios WHERE id = $1', [id]);
+    return rows[0];
   }
 
-  function updateDisponivel(id, disponivel) {
-    return db.prepare('UPDATE horarios SET disponivel = ? WHERE id = ?').run(disponivel, id);
+  async function updateDisponivel(id, disponivel, exec = pool) {
+    return exec.query('UPDATE horarios SET disponivel = $1 WHERE id = $2', [disponivel, id]);
   }
 
   // Atomically marks a slot as unavailable only if it is currently available.
-  // Returns the run-info object; check .changes === 1 to confirm success.
-  function claimIfAvailable(id) {
-    return db.prepare('UPDATE horarios SET disponivel = 0 WHERE id = ? AND disponivel = 1').run(id);
+  // Returns the pg result; check .rowCount === 1 to confirm success.
+  async function claimIfAvailable(id, exec = pool) {
+    return exec.query('UPDATE horarios SET disponivel = 0 WHERE id = $1 AND disponivel = 1', [id]);
   }
 
   return { findAvailable, findAvailableByDate, findById, updateDisponivel, claimIfAvailable };

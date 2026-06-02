@@ -1,13 +1,19 @@
 const request = require('supertest');
-const { createTestApp } = require('./setup');
+const { createTestApp, closeTestPool } = require('./setup');
 
-// Note: SQLite in WAL or default journal mode serialises writers, so better-sqlite3
-// transactions are already serialised inside a single process. This test validates
-// that the atomic claimIfAvailable guard prevents double-booking even when requests
-// are fired concurrently from the same Node.js event loop.
+let pool;
+
+afterAll(async () => {
+  await closeTestPool();
+});
+
+// Postgres row-level locking serialises competing UPDATE … WHERE disponivel=1 on the same
+// slot. This validates that the atomic claimIfAvailable guard prevents double-booking even
+// when two requests are fired concurrently from the same Node.js event loop.
 describe('Concorrência — agendamento simultâneo do mesmo horário', () => {
   it('apenas um agendamento deve ser criado quando dois pacientes disputam o mesmo horário', async () => {
-    const { app } = createTestApp();
+    const { app, pool: p } = await createTestApp();
+    pool = p;
 
     const horariosRes = await request(app).get('/horarios/disponiveis');
     const horario = horariosRes.body[0];

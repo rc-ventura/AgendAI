@@ -17,7 +17,7 @@ const limiter = rateLimit({
   message: { error: 'Muitas requisições. Tente novamente em instantes.' },
 });
 
-function createApp(db) {
+function createApp(pool) {
   const app = express();
 
   app.use(express.json());
@@ -34,11 +34,11 @@ function createApp(db) {
   }
   app.use(requestLogger);
 
-  app.use('/horarios', horariosRouter(db));
-  app.use('/agendamentos', agendamentosRouter(db));
-  app.use('/pacientes', pacientesRouter(db));
-  app.use('/pagamentos', pagamentosRouter(db));
-  app.use('/painel', painelRouter(db));
+  app.use('/horarios', horariosRouter(pool));
+  app.use('/agendamentos', agendamentosRouter(pool));
+  app.use('/pacientes', pacientesRouter(pool));
+  app.use('/pagamentos', pagamentosRouter(pool));
+  app.use('/painel', painelRouter(pool));
 
   app.use(errorHandler);
 

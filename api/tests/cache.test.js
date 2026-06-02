@@ -1,14 +1,21 @@
 const request = require('supertest');
-const { createTestApp } = require('./setup');
+const { createTestApp, closeTestPool } = require('./setup');
 const cache = require('../src/cache');
 
-beforeEach(() => {
+let pool;
+
+beforeEach(async () => {
   cache.clear();
+});
+
+afterAll(async () => {
+  await closeTestPool();
 });
 
 describe('Cache de horários disponíveis', () => {
   it('segunda requisição é servida do cache (mesmo body)', async () => {
-    const { app } = createTestApp();
+    const { app, pool: p } = await createTestApp();
+    pool = p;
 
     const res1 = await request(app).get('/horarios/disponiveis');
     const res2 = await request(app).get('/horarios/disponiveis');
@@ -19,7 +26,8 @@ describe('Cache de horários disponíveis', () => {
   });
 
   it('cache é invalidado após agendamento — horário some da lista', async () => {
-    const { app } = createTestApp();
+    const { app, pool: p } = await createTestApp();
+    pool = p;
 
     // Prime the cache
     const before = await request(app).get('/horarios/disponiveis');
@@ -36,9 +44,11 @@ describe('Cache de horários disponíveis', () => {
   });
 
   it('cache é invalidado após cancelamento — horário volta à lista', async () => {
-    const { app, db } = createTestApp();
+    const { app, pool: p } = await createTestApp();
+    pool = p;
 
-    const agendamento = db.prepare("SELECT id, horario_id FROM agendamentos WHERE status='ativo' LIMIT 1").get();
+    const { rows } = await p.query("SELECT id, horario_id FROM agendamentos WHERE status = 'ativo' LIMIT 1");
+    const agendamento = rows[0];
 
     // Prime cache (horario should not be in list)
     const before = await request(app).get('/horarios/disponiveis');

@@ -1,10 +1,16 @@
-function createPacientesRepository(db) {
-  function findByEmail(email) {
-    return db.prepare('SELECT id, nome, email, telefone FROM pacientes WHERE email = ?').get(email);
+function createPacientesRepository(pool) {
+  async function findByEmail(email, exec = pool) {
+    const { rows } = await exec.query(
+      'SELECT id, nome, email, telefone FROM pacientes WHERE email = $1', [email]
+    );
+    return rows[0];
   }
 
-  function findById(id) {
-    return db.prepare('SELECT id, nome, email, telefone FROM pacientes WHERE id = ?').get(id);
+  async function findById(id, exec = pool) {
+    const { rows } = await exec.query(
+      'SELECT id, nome, email, telefone FROM pacientes WHERE id = $1', [id]
+    );
+    return rows[0];
   }
 
   return { findByEmail, findById };
