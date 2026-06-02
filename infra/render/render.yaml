@@ -51,7 +51,9 @@ services:
     runtime: image
     image:
       url: ghcr.io/rc-ventura/agendai-agent:latest
-      creds: ghcr-rc-ventura
+      creds:
+        fromRegistryCreds:
+          name: ghcr-rc-ventura
     envVars:
       - key: PORT
         value: "8123"
