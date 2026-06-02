@@ -111,9 +111,9 @@ Tests connect to a real Postgres via `DATABASE_URL`, drop + recreate schema + se
 | Variable | Required | Purpose |
 |---|---|---|
 | `OPENAI_API_KEY` | ✅ | GPT-4o-mini, Whisper, TTS |
-| `LANGSMITH_API_KEY` | ✅ | LangGraph Server license (Developer plan) |
-| `LANGCHAIN_API_KEY` | ✅ | Same LangSmith key — used by SDK for tracing |
-| `LANGCHAIN_TRACING_V2` | — | `true` to enable LangSmith traces |
+| `LANGSMITH_API_KEY` | ✅ | LangGraph Server license + tracing key (Developer plan) |
+| `LANGSMITH_TRACING` | — | `true` to enable LangSmith traces |
+| `LANGSMITH_PROJECT` | — | LangSmith project name (default: `AgendAI`) |
 | `DATABASE_URL` | ✅ | Postgres for the API (`agendai` database) |
 | `DATABASE_URI` | ✅ | Postgres for the LangGraph Server (`agendai_lg` database) |
 | `REDIS_URI` | ✅ | Redis for SSE streaming (LangGraph Server) |
@@ -122,4 +122,4 @@ Tests connect to a real Postgres via `DATABASE_URL`, drop + recreate schema + se
 | `PORT` | `3000` | API listen port |
 | `GMAIL_USER` / `GMAIL_APP_PASSWORD` | — | Optional SMTP for appointment emails |
 
-> **`LANGSMITH_API_KEY` = `LANGCHAIN_API_KEY`**: são a mesma chave (`lsv2_pt_...`). Copie o mesmo valor nos dois campos.
+> `LANGSMITH_API_KEY` serve para os dois papéis: licença do servidor e tracing. Um único campo.

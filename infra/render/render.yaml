@@ -49,12 +49,10 @@ services:
       - key: REDIS_URI
         sync: false   # Upstash: rediss://default:xxx@xxx.upstash.io:6379
       - key: LANGSMITH_API_KEY
-        sync: false   # license key (Developer plan)
-      - key: LANGCHAIN_API_KEY
-        sync: false   # tracing key
-      - key: LANGCHAIN_TRACING_V2
+        sync: false   # license + tracing key (Developer plan)
+      - key: LANGSMITH_TRACING
         value: "true"
-      - key: LANGCHAIN_PROJECT
+      - key: LANGSMITH_PROJECT
         value: AgendAI
       - key: OPENAI_API_KEY
         sync: false

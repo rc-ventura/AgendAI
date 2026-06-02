@@ -12,7 +12,7 @@
 #   DATABASE_URI  — Postgres para checkpointing (agendai_lg)
 #   REDIS_URI     — Upstash Redis para SSE streaming
 #   LANGSMITH_API_KEY — license key (Developer plan)
-#   OPENAI_API_KEY, API_BASE_URL, LANGCHAIN_API_KEY
+#   OPENAI_API_KEY, API_BASE_URL
 
 # Fallback para dev rápido sem langgraph build (só local, sem persistência):
 FROM python:3.11-slim
