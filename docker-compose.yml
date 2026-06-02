@@ -1,15 +1,52 @@
 version: '3.8'
 
+# ── Serviços stateful locais (paridade de dev — em produção use Neon/Upstash) ─
+# Em produção estes containers NÃO existem; substituídos por serviços gerenciados.
+
 services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: agendai
+      POSTGRES_PASSWORD: agendai
+      POSTGRES_DB: agendai
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    # Expõe na porta 5433 localmente para evitar conflito com Postgres do sistema
+    ports:
+      - "127.0.0.1:5433:5432"
+    restart: unless-stopped
+    networks:
+      - agendai-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agendai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks:
+      - agendai-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── API Express ─────────────────────────────────────────────────────────────
   api:
     build: ./api
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./data:/app/data
+    # Sem porta pública — somente acessível internamente (via langgraph-server)
     environment:
       - PORT=3000
-      - DB_PATH=/app/data/clinica.db
+      - DATABASE_URL=postgres://agendai:agendai@postgres:5432/agendai
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - agendai-network
@@ -18,45 +55,42 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 15s
 
-  agent:
-    build: ./agent
-    ports:
-      - "127.0.0.1:8123:8123"  # só localhost — LangGraph Studio; externo usa nginx:8080
+  # ── LangGraph Server (Opção B) ───────────────────────────────────────────────
+  # Imagem construída via: cd agent && langgraph build -t agendai-agent --no-pull
+  # Sem porta pública — somente nginx acessa via rede interna.
+  langgraph-server:
+    image: agendai-agent:latest
     env_file: .env
     environment:
+      # Postgres separado para checkpoints/threads do agente
+      - DATABASE_URI=postgres://agendai:agendai@postgres:5432/agendai_lg
+      - REDIS_URI=redis://redis:6379
       - API_BASE_URL=http://api:3000
-      - LANGGRAPH_AUTH_TOKEN=${LANGGRAPH_AUTH_TOKEN}
     depends_on:
-      - api
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - agendai-network
 
-  nginx:
-    build: ./nginx
-    ports:
-      - "8080:8080"
-    environment:
-      - LANGGRAPH_AUTH_TOKEN=${LANGGRAPH_AUTH_TOKEN}
-    depends_on:
-      - agent
-    restart: unless-stopped
-    networks:
-      - agendai-network
-
+  # ── Chat UI (Next.js) ────────────────────────────────────────────────────────
+  # Sem porta pública — servida pelo nginx via location /
   agent-ui-pro:
     build:
       context: ./agent-ui-pro
       args:
-        NEXT_PUBLIC_API_URL: http://localhost:8080
+        # Same-origin: a UI é servida pelo nginx, então a API é o mesmo origin
+        NEXT_PUBLIC_API_URL: ""
         NEXT_PUBLIC_ASSISTANT_ID: agendai_agent
         NEXT_PUBLIC_LANGGRAPH_API_KEY: ${LANGGRAPH_AUTH_TOKEN}
-    ports:
-      - "3002:3002"
     depends_on:
-      - nginx
+      - langgraph-server
     restart: unless-stopped
     networks:
       - agendai-network
@@ -65,7 +99,24 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 20s
+
+  # ── nginx — ÚNICO serviço com porta pública ──────────────────────────────────
+  nginx:
+    build: ./nginx
+    ports:
+      - "8080:8080"
+    environment:
+      - LANGGRAPH_AUTH_TOKEN=${LANGGRAPH_AUTH_TOKEN}
+    depends_on:
+      - agent-ui-pro
+      - langgraph-server
+    restart: unless-stopped
+    networks:
+      - agendai-network
+
+volumes:
+  postgres-data:
 
 networks:
   agendai-network:
