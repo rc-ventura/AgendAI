@@ -54,4 +54,6 @@ jobs:
       - uses: astral-sh/setup-uv@v3
 
       - name: Run tests
+        env:
+          OPENAI_API_KEY: dummy   # satisfaz inicialização do cliente; chamadas reais são mockadas
         run: cd agent && uv run --extra dev pytest --tb=short
