@@ -18,6 +18,10 @@ function createConnection(connectionString) {
   }
   return new Pool({
     connectionString,
+    // TODO(Phase 2 — Security hardening): replace `rejectUnauthorized: false`
+    // with strict cert verification using Neon's published CA. Current setting
+    // encrypts traffic but does NOT authenticate the DB host, leaving a narrow
+    // MITM window for an attacker positioned on the Render↔Neon network path.
     ssl: needsSsl(connectionString) ? { rejectUnauthorized: false } : false,
   });
 }
