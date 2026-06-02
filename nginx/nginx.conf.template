@@ -45,11 +45,6 @@ server {
         proxy_pass http://langgraph-server:8123;
     }
 
-    # ── Painel de agendamentos (API interna) ─────────────────────────────────
-    location /painel {
-        proxy_pass http://api:3000/painel;
-    }
-
     # ── Chat UI (Next.js) — everything else ──────────────────────────────────
     location / {
         # WebSocket upgrade para HMR em dev (ignorado em prod)
