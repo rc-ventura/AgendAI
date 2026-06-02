@@ -12,6 +12,12 @@ server {
     proxy_read_timeout        300s;
     chunked_transfer_encoding on;
 
+    # ── Health check sem auth (usado pelo Render) ────────────────────────────
+    location = /health {
+        return 200 'ok';
+        add_header Content-Type text/plain;
+    }
+
     # ── LangGraph Server (agent) — paths conhecidos do SDK ───────────────────
     # Autenticação + rate limit ficam SOMENTE aqui (UI/assets não precisam de token).
     # Falha fechado: se LANGGRAPH_AUTH_TOKEN não estiver definido, retorna 500.
@@ -37,6 +43,11 @@ server {
         proxy_set_header Connection "";
 
         proxy_pass http://langgraph-server:8123;
+    }
+
+    # ── Painel de agendamentos (API interna) ─────────────────────────────────
+    location /painel {
+        proxy_pass http://api:3000/painel;
     }
 
     # ── Chat UI (Next.js) — everything else ──────────────────────────────────

@@ -26,6 +26,8 @@ async function seed(pool) {
     await insPaciente('Pedro Oliveira', 'pedro@email.com', '11999990003');
     await insPaciente('Ana Ferreira', 'ana@email.com', '11999990004');
     await insPaciente('Lucas Pereira', 'lucas@email.com', '11999990005');
+    await insPaciente('Rafael Ventura', 'rcventura1080@gmail.com', '11999990006');
+
 
     // Horários — próximos dias úteis.
     // Use local-time formatting (not toISOString, which is UTC) so the calendar day matches

@@ -28,7 +28,7 @@ class ApiClient:
 
     async def buscar_paciente(self, email: str) -> dict:
         r = await self._client.get(f"/pacientes/{email}")
-        if r.status_code == 404:
+        if r.status_code in (400, 404):
             return {"erro": "Paciente não encontrado"}
         r.raise_for_status()
         return r.json()

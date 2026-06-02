@@ -1,4 +1,3 @@
-version: '3.8'
 
 # ── Serviços stateful locais (paridade de dev — em produção use Neon/Upstash) ─
 # Em produção estes containers NÃO existem; substituídos por serviços gerenciados.
