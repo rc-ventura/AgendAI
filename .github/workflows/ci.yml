@@ -54,4 +54,4 @@ jobs:
       - uses: astral-sh/setup-uv@v3
 
       - name: Run tests
-        run: cd agent && uv run pytest --tb=short
+        run: cd agent && uv run --extra dev pytest --tb=short
