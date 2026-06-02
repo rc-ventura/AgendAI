@@ -64,6 +64,10 @@ services:
     image: agendai-agent:latest
     env_file: .env
     environment:
+      # A imagem langchain/langgraph-api usa porta 3000 por padrão.
+      # Movemos para 8123 para não colidir com a API Node (também em 3000).
+      - PORT=8123
+      - HOST=0.0.0.0
       # Postgres separado para checkpoints/threads do agente
       - DATABASE_URI=postgres://agendai:agendai@postgres:5432/agendai_lg
       - REDIS_URI=redis://redis:6379
