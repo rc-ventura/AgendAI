@@ -1,5 +1,9 @@
 limit_req_zone $binary_remote_addr zone=agent_limit:10m rate=20r/m;
 
+# Defer upstream DNS resolution to request time so nginx starts even if
+# downstream services are still booting (common on Render free tier).
+resolver 1.1.1.1 8.8.8.8 valid=30s ipv6=off;
+
 server {
     listen 8080;
     server_name _;
@@ -42,7 +46,9 @@ server {
         proxy_cache      off;
         proxy_set_header Connection "";
 
-        proxy_pass http://langgraph-server:8123;
+        # LANGGRAPH_UPSTREAM must be a variable for resolver-based deferred lookup.
+        set $langgraph_upstream "${LANGGRAPH_UPSTREAM}";
+        proxy_pass http://$langgraph_upstream;
     }
 
     # ── Chat UI (Next.js) — everything else ──────────────────────────────────
@@ -52,6 +58,7 @@ server {
         proxy_set_header Connection "upgrade";
 
         proxy_buffering off;
-        proxy_pass http://agent-ui-pro:3002;
+        set $ui_upstream "${UI_UPSTREAM}";
+        proxy_pass http://$ui_upstream;
     }
 }
