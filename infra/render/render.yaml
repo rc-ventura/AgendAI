@@ -22,10 +22,12 @@ services:
     envVars:
       - key: LANGGRAPH_AUTH_TOKEN
         sync: false
+      - key: NGINX_RESOLVER
+        value: "1.1.1.1 8.8.8.8"
       - key: LANGGRAPH_UPSTREAM
-        value: agendai-langgraph:8123
+        value: https://agendai-langgraph.onrender.com
       - key: UI_UPSTREAM
-        value: agendai-ui:3002
+        value: https://agendai-ui.onrender.com
     healthCheckPath: /health
     autoDeploy: false
 
@@ -76,7 +78,7 @@ services:
       - key: OPENAI_API_KEY
         sync: false
       - key: API_BASE_URL
-        value: http://agendai-api:3000   # hostname interno do Render (mesmo nome do serviço)
+        value: https://agendai-api-kaou.onrender.com
       - key: GMAIL_USER
         sync: false
       - key: GMAIL_APP_PASSWORD

@@ -2,7 +2,12 @@ limit_req_zone $binary_remote_addr zone=agent_limit:10m rate=20r/m;
 
 # Defer upstream DNS resolution to request time so nginx starts even if
 # downstream services are still booting (common on Render free tier).
-resolver 1.1.1.1 8.8.8.8 valid=30s ipv6=off;
+# Local Docker Compose: NGINX_RESOLVER=127.0.0.11 (Docker embedded DNS)
+# Render free tier:     NGINX_RESOLVER=1.1.1.1 8.8.8.8 (public DNS for public URLs)
+resolver ${NGINX_RESOLVER} valid=30s ipv6=off;
+
+# Required for HTTPS upstreams (Render public URLs use SNI-based SSL).
+proxy_ssl_server_name on;
 
 server {
     listen 8080;
@@ -47,8 +52,9 @@ server {
         proxy_set_header Connection "";
 
         # LANGGRAPH_UPSTREAM must be a variable for resolver-based deferred lookup.
+        # Full URL including scheme: http://... (local) or https://... (Render).
         set $langgraph_upstream "${LANGGRAPH_UPSTREAM}";
-        proxy_pass http://$langgraph_upstream;
+        proxy_pass $langgraph_upstream;
     }
 
     # ── Chat UI (Next.js) — everything else ──────────────────────────────────
@@ -58,7 +64,8 @@ server {
         proxy_set_header Connection "upgrade";
 
         proxy_buffering off;
+        # Full URL including scheme: http://... (local) or https://... (Render).
         set $ui_upstream "${UI_UPSTREAM}";
-        proxy_pass http://$ui_upstream;
+        proxy_pass $ui_upstream;
     }
 }
