@@ -95,7 +95,7 @@ services:
     dockerContext: ./agent-ui-pro
     envVars:
       - key: NEXT_PUBLIC_API_URL
-        value: ""                # vazio = same-origin (nginx serve a UI)
+        value: https://agendai-nginx.onrender.com
       - key: NEXT_PUBLIC_ASSISTANT_ID
         value: agendai_agent
       - key: NEXT_PUBLIC_LANGGRAPH_API_KEY
