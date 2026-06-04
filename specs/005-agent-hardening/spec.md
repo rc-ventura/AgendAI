@@ -277,34 +277,45 @@ Fase 3     | Agent Engine     | Vertex Memory Bank   | + testes de comportamento
 
 ---
 
-### P8 — Modernização do Core Agêntico (LangGraph v1.0+)
+### P8 — Modernização do Core Agêntico: `create_agent` + Middleware (LangChain v1 + LangGraph v1)
 
-**Problema:** O grafo atual (`agent/agent/graph.py`) foi construído com padrões da era
-pré-v1.0 do LangGraph: `StateGraph` manual, `TypedDict` customizado, funções de roteamento
-escritas à mão e `ToolNode` wrapping manual. O LangGraph v1.0+ introduz prebuilt patterns
-que reduzem boilerplate, melhoram observabilidade e habilitam features como human-in-the-loop.
+> **Correção em relação ao rascunho anterior:** `create_react_agent` foi **depreciado** no
+> LangGraph v1.0 em favor de `create_agent` da `langchain.agents`. Os primitivos do grafo
+> (`StateGraph`, nós, arestas) são **inalterados** — não há breaking change no grafo em si.
+> O que muda é a camada de orquestração acima do grafo: o sistema de **middleware**.
+>
+> Atenção: o `create_agent` foi removido em `langchain v1.1.0` sem aviso prévio — monitorar
+> o changelog antes de implementar. Os primitivos do LangGraph permanecem estáveis.
 
-**Grafo atual:**
-```
-START → detect_input_type
-          ├─ (texto) → chat_with_llm ⇄ execute_tools → process_tool_results → chat_with_llm
-          │                └─ (sem tools) → send_email → END
-          │                               └─ (audio) → synthesize_tts → END
-          └─ (audio) → transcribe_audio → chat_with_llm → synthesize_tts → END
-```
+**Problema:** O grafo atual (`graph.py`) implementa manualmente lógica que o novo sistema de
+middleware do LangChain v1 provê como prebuilt: retry de LLM, summarização de contexto,
+detecção de PII, e human-in-the-loop. Além disso, `MessagesState` como base do estado elimina
+boilerplate no `AgendAIState`.
 
-**O que muda com LangGraph v1.0+:**
+**Documentação oficial:**
+- [LangGraph v1.0 release](https://docs.langchain.com/oss/python/releases/langgraph-v1)
+- [LangChain v1.0 release](https://docs.langchain.com/oss/python/releases/langchain-v1)
+- [Middleware overview](https://docs.langchain.com/oss/python/langchain/middleware/overview)
 
-#### 1. `MessagesState` como base do estado
+---
+
+#### 1. `MessagesState` como base do estado (LangGraph v1 — estável)
+
+Os primitivos do LangGraph v1 são inalterados. A única mudança de estado recomendada é
+usar `MessagesState` como classe base em vez de `TypedDict` manual:
 
 ```python
-# Antes — TypedDict manual com add_messages:
+# Antes — TypedDict com add_messages manual:
+from typing import Annotated
+from langchain_core.messages import AnyMessage
+from langgraph.graph.message import add_messages
+
 class AgendAIState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     input_type: Literal["text", "audio"]
     ...
 
-# Depois — estende MessagesState (já tem messages com add_messages):
+# Depois — MessagesState já inclui messages com add_messages:
 from langgraph.graph import MessagesState
 
 class AgendAIState(MessagesState):
@@ -316,117 +327,153 @@ class AgendAIState(MessagesState):
     final_response: str | bytes | None
 ```
 
-#### 2. `create_react_agent` para o core LLM + tools
+O grafo (`StateGraph`, nós, arestas, roteamento condicional) permanece **idêntico**.
 
-O loop ReAct (llm → tools → llm → ... → end) pode ser substituído por `create_react_agent`
-como subgrafo, preservando os nós de áudio externos:
+---
+
+#### 2. `create_agent` + Middleware (LangChain v1 — substitui `create_react_agent`)
+
+`create_react_agent` (de `langgraph.prebuilt`) foi depreciado. O substituto é `create_agent`
+de `langchain.agents`, que executa sobre o LangGraph e expõe um sistema de middleware com
+hooks em cada etapa do loop agêntico:
+
+```
+before_agent → before_model → wrap_model_call → [LLM] → after_model
+                                                              ↓
+                                               wrap_tool_call → [Tools] → after_agent
+```
+
+**Hooks disponíveis:**
+
+| Hook | Quando executa | Casos de uso |
+|------|---------------|-------------|
+| `before_agent` | Uma vez, no início | Carregar memória, validar input |
+| `before_model` | Antes de cada chamada ao LLM | Trim de histórico, PII input |
+| `wrap_model_call` | Envolve a chamada ao LLM | Retry, cache, troca de modelo |
+| `after_model` | Após LLM, antes de tools | Human-in-the-loop, PII output |
+| `wrap_tool_call` | Envolve cada tool call | Injetar contexto, interceptar resultado |
+| `after_agent` | Uma vez, ao final | Salvar memória, notificações, cleanup |
+
+**Prebuilt middleware relevantes para o AgendAI:**
 
 ```python
-from langgraph.prebuilt import create_react_agent
-
-# Core ReAct: llm ⇄ tools (substitui llm_core + execute_tools + process_tool_results)
-react_core = create_react_agent(
-    model=llm,
-    tools=ALL_TOOLS,
-    state_modifier=SYSTEM_PROMPT,   # system prompt injetado
-    response_format=AgendAIOutput,  # structured output (Pydantic)
+from langchain.agents import create_agent
+from langchain.agents.middleware import (
+    PIIMiddleware,             # P4: detecção e redação de PII input + output
+    SummarizationMiddleware,   # P6: resume histórico quando excede token threshold
+    HumanInTheLoopMiddleware,  # P9: pausa antes de tools irreversíveis
+    ModelRetryMiddleware,      # P1 (complementa tenacity no llm_core)
 )
 
-# Grafo externo preserva o pipeline de áudio:
-builder.add_node("react_core", react_core)
-builder.add_node("detect_input_type", detect_input_type)
-builder.add_node("transcribe_audio", transcribe_audio)
-builder.add_node("send_email", send_email)
-builder.add_node("synthesize_tts", synthesize_tts)
+agent = create_agent(
+    model=llm,
+    tools=ALL_TOOLS,
+    middleware=[
+        PIIMiddleware(),
+        SummarizationMiddleware(token_threshold=8000),
+        HumanInTheLoopMiddleware(interrupt_on={"criar_agendamento": True,
+                                               "cancelar_agendamento": True}),
+        ModelRetryMiddleware(retries=3),
+    ],
+)
 ```
 
-#### 3. `tools_condition` substitui `route_after_llm`
-
-```python
-# Antes — função de roteamento manual:
-def route_after_llm(state) -> Literal["execute_tools", "send_email", ...]:
-    last = state["messages"][-1]
-    if isinstance(last, AIMessage) and getattr(last, "tool_calls", None):
-        return "execute_tools"
-    ...
-
-# Depois — prebuilt do LangGraph:
-from langgraph.prebuilt import tools_condition
-builder.add_conditional_edges("chat_with_llm", tools_condition)
-```
-
-#### 4. `ToolNode` com `handle_tool_errors=True`
-
-```python
-from langgraph.prebuilt import ToolNode
-
-# Antes — wrapping manual sem error handling:
-tool_node = ToolNode(ALL_TOOLS)
-
-# Depois — error handling automático + parallel execution:
-tool_node = ToolNode(ALL_TOOLS, handle_tool_errors=True)
-# Erros de tool viram ToolMessage com o traceback — LLM pode corrigir e tentar de novo
-```
-
-#### 5. `interrupt()` para human-in-the-loop
-
-Novo em LangGraph v1.0+ — permite pausar o grafo e aguardar confirmação antes de executar
-ações irreversíveis (criar agendamento, cancelar):
-
-```python
-from langgraph.types import interrupt
-
-async def confirm_booking(state: AgendAIState) -> dict:
-    # Pausa o grafo e envia os dados para o usuário confirmar
-    confirmation = interrupt({
-        "type": "booking_confirmation",
-        "medico": state["email_payload"]["medico_nome"],
-        "data_hora": state["email_payload"]["data_hora"],
-    })
-    if not confirmation["approved"]:
-        return {"email_pending": False, "email_payload": None}
-    return state
-```
-
-#### 6. Streaming moderno (`stream_mode="messages"`)
-
-```python
-# Antes — streaming via SSE do LangGraph Server (opaco)
-
-# Depois — streaming granular com subgraphs:
-async for chunk in graph.astream(
-    input,
-    stream_mode="messages",      # token-a-token
-    subgraphs=True,              # eventos dos subgrafos (react_core)
-):
-    yield chunk
-```
-
-**Arquitetura alvo (Fase 2):**
+**Impacto no grafo:** `create_agent` retorna um grafo LangGraph compilado. Pode ser usado
+como nó/subgrafo dentro do grafo externo que mantém o pipeline de áudio:
 
 ```
 START → detect_input_type
-          ├─ (texto) → [react_core: create_react_agent] → send_email? → END
-          └─ (audio) → transcribe_audio → [react_core] → synthesize_tts → END
-
-react_core (subgrafo):
-  chat_with_llm ──(tools_condition)──► ToolNode(handle_tool_errors=True)
-       ▲                                          │
-       └──────────────────────────────────────────┘
-       └──(no tools)──► END
+          ├─ (texto) → [agent: create_agent + middleware] → send_email? → END
+          └─ (audio) → transcribe_audio → [agent] → synthesize_tts → END
 ```
 
-**O que NÃO muda:**
-- Nós de áudio (`transcribe_audio`, `synthesize_tts`) — pipeline específico, fora do ReAct
-- `email_sender.py` — side effect pós-tool, não encaixa em `create_react_agent` nativo
+---
+
+#### 3. O que NÃO muda
+
+- `StateGraph`, nós, arestas, roteamento condicional — **inalterados** (LangGraph v1 estável)
+- Nós de áudio (`transcribe_audio`, `synthesize_tts`) — fora do `create_agent`
+- `email_sender.py` — side effect pós-tool, permanece como nó externo
 - `detect_input_type` — roteamento de entrada, externo ao core
 - Tools (`@tool` functions) — API inalterada
 
+---
+
+#### 4. Relação entre Middleware e outros Ps
+
+O sistema de middleware torna P4 e P6 redundantes como nós manuais no grafo:
+
+| Gap | Solução manual (sem middleware) | Com middleware LangChain v1 |
+|-----|---------------------------------|----------------------------|
+| P4 (guardrails PII) | Nó `validate_input` + `validate_output` | `PIIMiddleware` |
+| P6 (context manager) | Função `trim_context()` manual | `SummarizationMiddleware` |
+| P9 (HITL) | `interrupt()` manual no nó | `HumanInTheLoopMiddleware` |
+| P1 (retry LLM) | tenacity em `llm_core.py` | `ModelRetryMiddleware` (complementar) |
+
+**Recomendação:** implementar P8 antes de P4 e P6 — o middleware elimina código manual que
+seria escrito para esses gaps.
+
+---
+
+### P9 — Human-in-the-Loop (HITL)
+
+**Problema:** O agente executa ações irreversíveis (criar agendamento, cancelar consulta)
+diretamente, sem pedir confirmação ao usuário. Um mal-entendido do LLM pode criar ou cancelar
+uma consulta que o paciente não queria.
+
+**O que é HITL:** O grafo pausa a execução antes de uma tool call crítica, apresenta os
+detalhes ao usuário e só prossegue com aprovação explícita.
+
+**Duas abordagens:**
+
+**A) `HumanInTheLoopMiddleware` (via `create_agent` — LangChain v1):**
+```python
+HumanInTheLoopMiddleware(
+    interrupt_on={
+        "criar_agendamento": True,   # pausa antes de criar
+        "cancelar_agendamento": True  # pausa antes de cancelar
+    }
+)
+```
+O middleware intercepta em `after_model` (após o LLM decidir usar a tool, antes de executar).
+
+**B) `interrupt()` nativo do LangGraph (sem `create_agent`):**
+```python
+from langgraph.types import interrupt
+
+async def confirm_action(state: AgendAIState) -> dict:
+    if state.get("email_payload"):
+        decision = interrupt({
+            "message": "Confirmar agendamento?",
+            "medico": state["email_payload"]["medico_nome"],
+            "data_hora": state["email_payload"]["data_hora"],
+        })
+        if not decision["confirmed"]:
+            return {"email_pending": False, "email_payload": None}
+    return state
+```
+
+**Fluxo com HITL:**
+```
+chat_with_llm → [LLM decide criar agendamento]
+      ↓
+ HITL check ──── pausa SSE ────► UI mostra confirmação ao paciente
+      │                               │
+      │                        paciente confirma
+      │                               │
+      └──────── resume ───────────────┘
+      ↓
+execute_tools → criar_agendamento → process_tool_results → send_email
+```
+
+**Requisito:** HITL com `interrupt()` requer checkpointer persistente (PostgresSaver) para
+salvar o estado enquanto aguarda resposta — bloqueado por P2.
+Com `HumanInTheLoopMiddleware` via `create_agent`, o gerenciamento de estado é interno.
+
 **Impacto:**
-- Remove ~40 linhas de boilerplate de roteamento manual
-- `handle_tool_errors=True` elimina crashes silenciosos em tool failures
-- `interrupt()` habilita confirmação de agendamento antes de criar (experiência mais segura)
-- Subgraph streaming melhora observabilidade no LangSmith
+- Elimina agendamentos/cancelamentos acidentais por erro de interpretação do LLM
+- Melhora confiança do usuário no sistema
+- Requisito de segurança para uso em ambiente médico real
 
 ---
 
@@ -434,14 +481,15 @@ react_core (subgrafo):
 
 | P | Gap | Esforço | Impacto | Fase | Status |
 |---|-----|---------|---------|------|--------|
-| P1 | Retry + Circuit Breaker | ~2h | Elimina erros silenciosos | 1/2 | ADR-024 |
+| P1 | Retry + Circuit Breaker | ~2h | Elimina erros silenciosos em produção | 1/2 | ADR-024 |
 | P2 | Sessão persistente | ~2h | Conversas sobrevivem a restarts | 1/2 | Bloqueado por P3 |
-| P3 | Auth de usuário | ~1 dia | Identidade + segurança | 2 | Desbloqueia P2/P7 |
-| P4 | Guardrails input+output | ~4h | Segurança de conteúdo | 2/3 | Bedrock na Fase 3 |
+| P3 | Auth de usuário | ~1 dia | Identidade + segurança | 2 | Desbloqueia P2/P7/P9 |
+| P4 | Guardrails input+output | ~4h | Segurança de conteúdo | 2/3 | Simplificado por P8 |
 | P5 | Logs estruturados | ~3h | Observabilidade end-to-end | 2 | — |
-| P6 | Context Manager | ~3h | Custo + latência em conv. longas | 2 | — |
+| P6 | Context Manager | ~3h | Custo + latência em conv. longas | 2 | Simplificado por P8 |
 | P7 | Memory Management | ~1 semana | Experiência personalizada | 2/3 | Bloqueado por P2/P3 |
-| P8 | Modernização LangGraph v1.0+ | ~1 dia | Menos boilerplate + HITL | 2 | — |
+| P8 | `create_agent` + Middleware | ~1 dia | Menos boilerplate, simplifica P4/P6/P9 | 2 | Aguardar estabilidade LC v1.1 |
+| P9 | Human-in-the-Loop (HITL) | ~4h | Elimina ações irreversíveis acidentais | 2 | Bloqueado por P2 (interrupt) |
 
 ---
 
@@ -488,8 +536,13 @@ P5 (logs) ─── independente ──── pode implementar agora
 
 P6 (context) ─── parcialmente independente ─── não precisa de P3, mas se beneficia de P7
 
-P8 (LangGraph v1.0+) ─── recomendado antes de P4/P6 ─── refactoring do grafo que
-                          facilita adicionar guardrails (novo nó) e context manager
+P8 (create_agent + middleware) ─── recomendado antes de P4/P6/P9
+   ├─ PIIMiddleware           → substitui nós manuais de P4
+   ├─ SummarizationMiddleware → substitui código manual de P6
+   └─ HumanInTheLoopMiddleware → alternativa ao interrupt() de P9
+
+P9 (HITL interrupt) ─── bloqueado por P2 (checkpointer persistente necessário)
+                    └─ ou via HumanInTheLoopMiddleware (P8) sem depender de P2
 ```
 
 ---
@@ -502,3 +555,12 @@ P8 (LangGraph v1.0+) ─── recomendado antes de P4/P6 ─── refactoring 
 - Vertex AI Agent Engine Sessions → Spec 007
 - Amazon Cognito / Firebase Auth → pode ser P3 desta spec ou Spec 007
 - Vertex AI Evaluation (quality gate no CI/CD) → Spec 007
+
+## Referências
+
+- [LangGraph v1.0 Release Notes](https://docs.langchain.com/oss/python/releases/langgraph-v1)
+- [LangChain v1.0 Release Notes](https://docs.langchain.com/oss/python/releases/langchain-v1)
+- [Middleware Overview](https://docs.langchain.com/oss/python/langchain/middleware/overview)
+- [How Middleware Lets You Customize Your Agent Harness](https://www.langchain.com/blog/how-middleware-lets-you-customize-your-agent-harness)
+- [ADR-024 — Retry e Resiliência](../../docs/adr/ADR-024-retry-resilience-strategy.md)
+- [Architecture Roadmap V2.0](../../docs/AgendAI_Architecture_Roadmap.pdf)
