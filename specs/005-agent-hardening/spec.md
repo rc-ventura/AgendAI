@@ -277,6 +277,159 @@ Fase 3     | Agent Engine     | Vertex Memory Bank   | + testes de comportamento
 
 ---
 
+### P8 — Modernização do Core Agêntico (LangGraph v1.0+)
+
+**Problema:** O grafo atual (`agent/agent/graph.py`) foi construído com padrões da era
+pré-v1.0 do LangGraph: `StateGraph` manual, `TypedDict` customizado, funções de roteamento
+escritas à mão e `ToolNode` wrapping manual. O LangGraph v1.0+ introduz prebuilt patterns
+que reduzem boilerplate, melhoram observabilidade e habilitam features como human-in-the-loop.
+
+**Grafo atual:**
+```
+START → detect_input_type
+          ├─ (texto) → chat_with_llm ⇄ execute_tools → process_tool_results → chat_with_llm
+          │                └─ (sem tools) → send_email → END
+          │                               └─ (audio) → synthesize_tts → END
+          └─ (audio) → transcribe_audio → chat_with_llm → synthesize_tts → END
+```
+
+**O que muda com LangGraph v1.0+:**
+
+#### 1. `MessagesState` como base do estado
+
+```python
+# Antes — TypedDict manual com add_messages:
+class AgendAIState(TypedDict):
+    messages: Annotated[list[AnyMessage], add_messages]
+    input_type: Literal["text", "audio"]
+    ...
+
+# Depois — estende MessagesState (já tem messages com add_messages):
+from langgraph.graph import MessagesState
+
+class AgendAIState(MessagesState):
+    input_type: Literal["text", "audio"]
+    audio_data: bytes | None
+    session_id: str
+    email_pending: bool
+    email_payload: dict | None
+    final_response: str | bytes | None
+```
+
+#### 2. `create_react_agent` para o core LLM + tools
+
+O loop ReAct (llm → tools → llm → ... → end) pode ser substituído por `create_react_agent`
+como subgrafo, preservando os nós de áudio externos:
+
+```python
+from langgraph.prebuilt import create_react_agent
+
+# Core ReAct: llm ⇄ tools (substitui llm_core + execute_tools + process_tool_results)
+react_core = create_react_agent(
+    model=llm,
+    tools=ALL_TOOLS,
+    state_modifier=SYSTEM_PROMPT,   # system prompt injetado
+    response_format=AgendAIOutput,  # structured output (Pydantic)
+)
+
+# Grafo externo preserva o pipeline de áudio:
+builder.add_node("react_core", react_core)
+builder.add_node("detect_input_type", detect_input_type)
+builder.add_node("transcribe_audio", transcribe_audio)
+builder.add_node("send_email", send_email)
+builder.add_node("synthesize_tts", synthesize_tts)
+```
+
+#### 3. `tools_condition` substitui `route_after_llm`
+
+```python
+# Antes — função de roteamento manual:
+def route_after_llm(state) -> Literal["execute_tools", "send_email", ...]:
+    last = state["messages"][-1]
+    if isinstance(last, AIMessage) and getattr(last, "tool_calls", None):
+        return "execute_tools"
+    ...
+
+# Depois — prebuilt do LangGraph:
+from langgraph.prebuilt import tools_condition
+builder.add_conditional_edges("chat_with_llm", tools_condition)
+```
+
+#### 4. `ToolNode` com `handle_tool_errors=True`
+
+```python
+from langgraph.prebuilt import ToolNode
+
+# Antes — wrapping manual sem error handling:
+tool_node = ToolNode(ALL_TOOLS)
+
+# Depois — error handling automático + parallel execution:
+tool_node = ToolNode(ALL_TOOLS, handle_tool_errors=True)
+# Erros de tool viram ToolMessage com o traceback — LLM pode corrigir e tentar de novo
+```
+
+#### 5. `interrupt()` para human-in-the-loop
+
+Novo em LangGraph v1.0+ — permite pausar o grafo e aguardar confirmação antes de executar
+ações irreversíveis (criar agendamento, cancelar):
+
+```python
+from langgraph.types import interrupt
+
+async def confirm_booking(state: AgendAIState) -> dict:
+    # Pausa o grafo e envia os dados para o usuário confirmar
+    confirmation = interrupt({
+        "type": "booking_confirmation",
+        "medico": state["email_payload"]["medico_nome"],
+        "data_hora": state["email_payload"]["data_hora"],
+    })
+    if not confirmation["approved"]:
+        return {"email_pending": False, "email_payload": None}
+    return state
+```
+
+#### 6. Streaming moderno (`stream_mode="messages"`)
+
+```python
+# Antes — streaming via SSE do LangGraph Server (opaco)
+
+# Depois — streaming granular com subgraphs:
+async for chunk in graph.astream(
+    input,
+    stream_mode="messages",      # token-a-token
+    subgraphs=True,              # eventos dos subgrafos (react_core)
+):
+    yield chunk
+```
+
+**Arquitetura alvo (Fase 2):**
+
+```
+START → detect_input_type
+          ├─ (texto) → [react_core: create_react_agent] → send_email? → END
+          └─ (audio) → transcribe_audio → [react_core] → synthesize_tts → END
+
+react_core (subgrafo):
+  chat_with_llm ──(tools_condition)──► ToolNode(handle_tool_errors=True)
+       ▲                                          │
+       └──────────────────────────────────────────┘
+       └──(no tools)──► END
+```
+
+**O que NÃO muda:**
+- Nós de áudio (`transcribe_audio`, `synthesize_tts`) — pipeline específico, fora do ReAct
+- `email_sender.py` — side effect pós-tool, não encaixa em `create_react_agent` nativo
+- `detect_input_type` — roteamento de entrada, externo ao core
+- Tools (`@tool` functions) — API inalterada
+
+**Impacto:**
+- Remove ~40 linhas de boilerplate de roteamento manual
+- `handle_tool_errors=True` elimina crashes silenciosos em tool failures
+- `interrupt()` habilita confirmação de agendamento antes de criar (experiência mais segura)
+- Subgraph streaming melhora observabilidade no LangSmith
+
+---
+
 ## Prioridade de Implementação
 
 | P | Gap | Esforço | Impacto | Fase | Status |
@@ -288,6 +441,7 @@ Fase 3     | Agent Engine     | Vertex Memory Bank   | + testes de comportamento
 | P5 | Logs estruturados | ~3h | Observabilidade end-to-end | 2 | — |
 | P6 | Context Manager | ~3h | Custo + latência em conv. longas | 2 | — |
 | P7 | Memory Management | ~1 semana | Experiência personalizada | 2/3 | Bloqueado por P2/P3 |
+| P8 | Modernização LangGraph v1.0+ | ~1 dia | Menos boilerplate + HITL | 2 | — |
 
 ---
 
@@ -333,6 +487,9 @@ P4 (guardrails) ─── independente ─── pode implementar agora (Bedrock
 P5 (logs) ─── independente ──── pode implementar agora
 
 P6 (context) ─── parcialmente independente ─── não precisa de P3, mas se beneficia de P7
+
+P8 (LangGraph v1.0+) ─── recomendado antes de P4/P6 ─── refactoring do grafo que
+                          facilita adicionar guardrails (novo nó) e context manager
 ```
 
 ---
