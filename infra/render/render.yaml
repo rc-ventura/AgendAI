@@ -79,10 +79,10 @@ services:
         sync: false
       - key: API_BASE_URL
         value: https://agendai-api-kaou.onrender.com
-      - key: GMAIL_USER
-        sync: false
-      - key: GMAIL_APP_PASSWORD
-        sync: false
+      - key: RESEND_API_KEY
+        sync: false   # Resend dashboard → API Keys (substitui Gmail SMTP, bloqueado no free tier)
+      - key: EMAIL_FROM
+        sync: false   # ex: AgendAI <contato@seudominio.com> (default: onboarding@resend.dev)
     healthCheckPath: /ok
     autoDeploy: false
 

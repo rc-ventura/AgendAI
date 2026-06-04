@@ -122,9 +122,8 @@ async def test_email_sender_agendamento():
         },
     )
 
-    with patch("agent.nodes.email_sender.smtplib.SMTP_SSL") as mock_smtp:
-        mock_smtp.return_value.__enter__ = MagicMock(return_value=MagicMock())
-        mock_smtp.return_value.__exit__ = MagicMock(return_value=False)
+    with patch("agent.nodes.email_sender.resend.Emails.send") as mock_send:
+        mock_send.return_value = {"id": "test-id"}
         result = await send_email(state)
 
     assert result["email_pending"] is False
@@ -148,9 +147,8 @@ async def test_email_sender_cancelamento():
         },
     )
 
-    with patch("agent.nodes.email_sender.smtplib.SMTP_SSL") as mock_smtp:
-        mock_smtp.return_value.__enter__ = MagicMock(return_value=MagicMock())
-        mock_smtp.return_value.__exit__ = MagicMock(return_value=False)
+    with patch("agent.nodes.email_sender.resend.Emails.send") as mock_send:
+        mock_send.return_value = {"id": "test-id"}
         result = await send_email(state)
 
     assert result["email_pending"] is False
@@ -224,7 +222,7 @@ async def test_email_sender_continues_after_smtp_failure():
         },
     )
 
-    with patch("agent.nodes.email_sender._send_smtp", side_effect=Exception("SMTP connection refused")):
+    with patch("agent.nodes.email_sender._send_resend", side_effect=Exception("Resend API error")):
         result = await send_email(state)
 
     # System MUST continue: email_pending cleared even when email fails

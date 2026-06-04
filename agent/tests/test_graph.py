@@ -46,7 +46,7 @@ async def test_email_pending_triggers_send_email(mock_api_client):
     mock_final_response = AIMessage(content="Consulta agendada com sucesso!")
 
     with patch("agent.nodes.llm_core.llm") as mock_llm, \
-         patch("agent.nodes.email_sender._send_smtp") as mock_smtp:
+         patch("agent.nodes.email_sender._send_resend") as mock_smtp:
         mock_llm.ainvoke = AsyncMock(return_value=mock_final_response)
         mock_smtp.return_value = None
 
@@ -129,7 +129,7 @@ async def test_full_scheduling_flow_us2(mock_api_client):
         return AIMessage(content="Consulta agendada com sucesso para o Dr. Carlos Lima!")
 
     with patch("agent.nodes.llm_core.llm") as mock_llm, \
-         patch("agent.nodes.email_sender._send_smtp") as mock_smtp:
+         patch("agent.nodes.email_sender._send_resend") as mock_smtp:
         mock_llm.ainvoke = AsyncMock(side_effect=llm_side_effect)
         mock_smtp.return_value = None
 
@@ -160,7 +160,7 @@ async def test_cancellation_flow_us3(mock_api_client):
         return AIMessage(content="Seu agendamento foi cancelado com sucesso.")
 
     with patch("agent.nodes.llm_core.llm") as mock_llm, \
-         patch("agent.nodes.email_sender._send_smtp") as mock_smtp:
+         patch("agent.nodes.email_sender._send_resend") as mock_smtp:
         mock_llm.ainvoke = AsyncMock(side_effect=llm_side_effect)
         mock_smtp.return_value = None
 
