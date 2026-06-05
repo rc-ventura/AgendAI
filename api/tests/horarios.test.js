@@ -14,7 +14,7 @@ afterAll(async () => {
 describe('GET /horarios/disponiveis', () => {
   it('retorna array com horários disponíveis', async () => {
     const res = await request(app).get('/horarios/disponiveis');
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(999); // CI GATE TEST — revert before merge
     expect(Array.isArray(res.body)).toBe(true);
     expect(res.body.length).toBeGreaterThan(0);
 

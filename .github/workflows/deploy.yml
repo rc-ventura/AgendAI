@@ -121,5 +121,12 @@ jobs:
             NEXT_PUBLIC_LANGGRAPH_API_KEY=${{ secrets.LANGGRAPH_AUTH_TOKEN }}
 
       # ── Disparar deploy no Render ─────────────────────────────────────────
+      # Each Render service has its own deploy hook URL (one hook = one service).
+      # Store each URL as a GitHub Secret. Order: api first (langgraph depends on it),
+      # then langgraph, then nginx (routes to both), then ui.
       - name: Trigger Render deploy
-        run: curl -fsSL -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}"
+        run: |
+          curl -fsSL -X POST "${{ secrets.RENDER_DEPLOY_HOOK_API }}"
+          curl -fsSL -X POST "${{ secrets.RENDER_DEPLOY_HOOK_LANGGRAPH }}"
+          curl -fsSL -X POST "${{ secrets.RENDER_DEPLOY_HOOK_NGINX }}"
+          curl -fsSL -X POST "${{ secrets.RENDER_DEPLOY_HOOK_UI }}"
