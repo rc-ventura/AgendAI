@@ -28,7 +28,7 @@ deploy, the persistence guarantee, and the real-DB test gate alike).
 
 **Purpose**: Obtain managed dependencies and swap the data-layer dependency.
 
-- [ ] T001 Provision managed dependencies (record connection strings into a local untracked `.env`): Neon project with two databases `agendai_app` → `DATABASE_URL` and `agendai_lg` → `DATABASE_URI`; Upstash Redis → `REDIS_URI`; LangSmith Developer → `LANGSMITH_API_KEY` (license) + `LANGCHAIN_API_KEY` (tracing). Reference `specs/004-fase-1-deploy/contracts/render-blueprint.md`
+- [X] T001 Provision managed dependencies (record connection strings into a local untracked `.env`): Neon project with two databases `agendai_app` → `DATABASE_URL` and `agendai_lg` → `DATABASE_URI`; Upstash Redis → `REDIS_URI`; LangSmith Developer → `LANGSMITH_API_KEY` (license) + `LANGCHAIN_API_KEY` (tracing). Reference `specs/004-fase-1-deploy/contracts/render-blueprint.md`
 - [X] T002 [P] In `api/package.json`, remove `better-sqlite3` and add `pg` (`^8`); keep all other deps
 - [X] T003 [P] Update `.env.example` to add `DATABASE_URL`, `DATABASE_URI`, `REDIS_URI`, `LANGSMITH_API_KEY` and document the new topology; keep existing keys (`OPENAI_API_KEY`, `LANGCHAIN_*`, `GMAIL_*`, `LANGGRAPH_AUTH_TOKEN`, `API_BASE_URL`)
 - [X] T004 [P] Confirm `.env` is gitignored (it is, line 2) and add a local Postgres for dev/test by appending `postgres:16` + `redis` services to `docker-compose.yml` (dev-parity only; expose Postgres on `5432` locally for the test runner)
@@ -105,8 +105,8 @@ scheduling flow end to end; confirm an appointment + confirmation (quickstart.md
 
 - [X] T035 [US1] Create `infra/render/render.yaml` Blueprint per `contracts/render-blueprint.md`: `nginx` public; `api`, `langgraph-server`, `agent-ui-pro` private; correct ports and `sync:false` env keys
 - [X] T036 [US1] Add `infra/render/README.md` documenting how to create Neon (2 DBs) + Upstash + LangSmith and paste secrets into Render
-- [ ] T037 [US1] Deploy the Blueprint to Render; set all `sync:false` env vars; set `agent-ui-pro` build args (`NEXT_PUBLIC_API_URL` = public nginx URL); confirm first boot creates the API schema+seed in `agendai_app` and the server schema in `agendai_lg`
-- [ ] T038 [US1] Public end-to-end verify from a clean machine: open the public URL, complete a text + audio scheduling flow, confirm appointment + confirmation (SC-001)
+- [X] T037 [US1] Deploy the Blueprint to Render; set all `sync:false` env vars; set `agent-ui-pro` build args (`NEXT_PUBLIC_API_URL` = public nginx URL); confirm first boot creates the API schema+seed in `agendai_app` and the server schema in `agendai_lg`
+- [X] T038 [US1] Public end-to-end verify from a clean machine: open the public URL, complete a text + audio scheduling flow, confirm appointment + confirmation (SC-001)
 
 **Checkpoint**: Public URL serves a working AgendAI end to end. MVP delivered.
 
@@ -141,9 +141,9 @@ green unblocks (quickstart §5 #4).
 
 - [X] T042 [US3] Create `.github/workflows/ci.yml` per `contracts/ci-cd.md`: `test-api` job with a `postgres:16` service + `DATABASE_URL` → `cd api && npm ci && npm test`; `test-agent` job with `astral-sh/setup-uv` → `cd agent && uv run pytest --tb=short`; triggers on `push` + `pull_request`
 - [X] T043 [US3] Create `.github/workflows/deploy.yml` per `contracts/ci-cd.md`: on push to `main`, log in to GHCR, `langgraph build` + push the agent image, `docker build` + push `api`/`nginx`/`agent-ui-pro`, then `curl` the `RENDER_DEPLOY_HOOK`
-- [ ] T044 [US3] Add GitHub secret `RENDER_DEPLOY_HOOK` (Render deploy hook URL); confirm GHCR `packages: write` permission is granted to the workflow
-- [ ] T045 [US3] Enable branch protection on `main` requiring `test-api` + `test-agent` to pass before merge (FR-010)
-- [ ] T046 [US3] Verify the gate: open a PR with a deliberately failing test → CI red, merge blocked; revert the break → CI green, merge allowed; confirm merge to `main` runs `deploy.yml` and the public URL serves the new build (SC-003, SC-004)
+- [X] T044 [US3] Add GitHub secret `RENDER_DEPLOY_HOOK` (Render deploy hook URL); confirm GHCR `packages: write` permission is granted to the workflow
+- [X] T045 [US3] Enable branch protection on `main` requiring `test-api` + `test-agent` to pass before merge (FR-010)
+- [X] T046 [US3] Verify the gate: open a PR with a deliberately failing test → CI red, merge blocked; revert the break → CI green, merge allowed; confirm merge to `main` runs `deploy.yml` and the public URL serves the new build (SC-003, SC-004)
 
 **Checkpoint**: Tests gate every change; passing merges auto-deploy.
 
@@ -189,8 +189,8 @@ LangSmith (quickstart §5 #6).
 
 - [ ] T052 [P] Finalize secrets migration: confirm no secret values are committed anywhere added by this feature; all runtime secrets live in Render env vars and all CI secrets in GitHub Secrets (FR-014/SC-006)
 - [ ] T053 [P] Update `README.md`: CI status badge (green), production URL, and the LangSmith traces screenshot from T051 (FR-019)
-- [ ] T054 [P] Update `CLAUDE.md` body to reflect SQLite→Postgres (`pg`), the LangGraph Server (Option B) topology, nginx single-edge routing, and the new env vars (the SPECKIT plan pointer is already set)
-- [ ] T055 [P] Remove dead references to `better-sqlite3`/`DB_PATH`/SQLite from docs and any leftover comments; ensure `.env.example` matches the deployed env matrix exactly
+- [X] T054 [P] Update `CLAUDE.md` body to reflect SQLite→Postgres (`pg`), the LangGraph Server (Option B) topology, nginx single-edge routing, and the new env vars (the SPECKIT plan pointer is already set)
+- [X] T055 [P] Remove dead references to `better-sqlite3`/`DB_PATH`/SQLite from docs and any leftover comments; ensure `.env.example` matches the deployed env matrix exactly
 - [ ] T056 Run the full `quickstart.md` verification table (checks #1–#7) end to end and confirm every Success Criterion (SC-001…SC-009) is met
 
 ---

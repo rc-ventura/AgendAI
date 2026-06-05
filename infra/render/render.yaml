@@ -43,7 +43,7 @@ services:
         value: "3000"
       - key: DATABASE_URL
         sync: false   # Neon: postgres://...@.../agendai_app?sslmode=require
-    healthCheckPath: /horarios/disponiveis
+    healthCheckPath: /health
     autoDeploy: false
 
   # ── LangGraph Server ─────────────────────────────────────────────────────────

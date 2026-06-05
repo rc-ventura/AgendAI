@@ -21,6 +21,10 @@ function createApp(pool) {
   const app = express();
 
   app.use(express.json());
+
+  // Health check — must be before rate limiter so Render probes never count against the limit
+  app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+
   // Request timeout: abort connections that hang for more than 30s
   app.use((req, res, next) => {
     res.setTimeout(30000, () => {

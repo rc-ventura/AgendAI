@@ -32,13 +32,15 @@ Crie uma conta no plano **Developer** (free: 5k traces/mês).
 
 No menu Settings → API Keys, gere:
 - **License key** (começa com `lsv2_sk_`) → `LANGSMITH_API_KEY` (obrigatório para o langgraph-server)
-- **Tracing key** (começa com `lsv2_pt_`) → `LANGCHAIN_API_KEY`
+- **Tracing key** (começa com `lsv2_pt_`) → (opcional, `LANGSMITH_API_KEY` já cobre os dois papéis)
 
 ### 4. GitHub Container Registry (GHCR)
 
 O `deploy.yml` usa `GITHUB_TOKEN` (built-in) para publicar as imagens.
-Adicione apenas:
-- `RENDER_DEPLOY_HOOK` — webhook do Render (próximo passo)
+Adicione os secrets no GitHub (Settings → Secrets → Actions):
+- `RENDER_DEPLOY_HOOK_API`, `RENDER_DEPLOY_HOOK_LANGGRAPH`, `RENDER_DEPLOY_HOOK_NGINX`, `RENDER_DEPLOY_HOOK_UI` — um deploy hook por serviço Render
+- `LANGSMITH_API_KEY` — licença do LangGraph Server (necessário no build do agente)
+- `LANGGRAPH_AUTH_TOKEN` — token de autenticação nginx ↔ UI
 
 ---
 
@@ -66,13 +68,12 @@ DATABASE_URL = postgres://...@.../agendai_app?sslmode=require
 
 **agendai-langgraph:**
 ```
-DATABASE_URI          = postgres://...@.../agendai_lg?sslmode=require
-REDIS_URI             = rediss://...
-LANGSMITH_API_KEY     = lsv2_sk_...
-LANGCHAIN_API_KEY     = lsv2_pt_...
-OPENAI_API_KEY        = sk-...
-GMAIL_USER            = (opcional)
-GMAIL_APP_PASSWORD    = (opcional)
+DATABASE_URI      = postgres://...@.../agendai_lg?sslmode=require
+REDIS_URI         = rediss://...
+LANGSMITH_API_KEY = lsv2_sk_...   # licença + tracing (uma só chave)
+OPENAI_API_KEY    = sk-...
+RESEND_API_KEY    = re_...         # opcional — e-mails de confirmação
+EMAIL_FROM        = AgendAI <contato@seudominio.com>   # opcional
 ```
 
 **agendai-ui** (Build Args no Render — seção "Environment" → "Build Args"):
@@ -85,32 +86,36 @@ NEXT_PUBLIC_LANGGRAPH_API_KEY    = <mesmo valor do LANGGRAPH_AUTH_TOKEN>
 > **Atenção**: `NEXT_PUBLIC_*` são baked no build time.
 > Se você mudar a URL do nginx, precisará fazer rebuild da UI.
 
-### Passo 3 — Deploy hook para o CI/CD
+### Passo 3 — Deploy hooks para o CI/CD
 
-1. No serviço `agendai-nginx` (ou em qualquer dos 4), vá em Settings → Deploy Hook
-2. Copie a URL do webhook
-3. No repositório GitHub → Settings → Secrets → New repository secret:
-   - Nome: `RENDER_DEPLOY_HOOK`
-   - Valor: a URL copiada
+Para cada serviço no Render Dashboard → Settings → Deploy Hook → copie a URL e cadastre no GitHub:
+
+| GitHub Secret | Serviço Render |
+|---|---|
+| `RENDER_DEPLOY_HOOK_API` | agendai-api |
+| `RENDER_DEPLOY_HOOK_LANGGRAPH` | agendai-langgraph |
+| `RENDER_DEPLOY_HOOK_NGINX` | agendai-nginx |
+| `RENDER_DEPLOY_HOOK_UI` | agendai-ui |
 
 ### Passo 4 — Primeiro deploy
 
 O `deploy.yml` roda automaticamente no merge para `main`.
 Para o primeiro deploy manual:
 
+O `deploy.yml` cuida do build e push automaticamente a cada merge em `main`.
+Para o primeiro deploy manual (antes do CI estar configurado):
+
 ```bash
-# Na raiz do repositório:
-# 1. Build da imagem do agente
 cd agent
 pip install -U "langgraph-cli"
 langgraph build -t ghcr.io/SEU_USUARIO/agendai-agent:latest --no-pull
 docker push ghcr.io/SEU_USUARIO/agendai-agent:latest
 
-# 2. Atualizar render.yaml com o seu usuário GitHub
-# (substituir GITHUB_OWNER na linha image.url)
-
-# 3. Disparar o deploy
-curl -fsSL -X POST "$RENDER_DEPLOY_HOOK"
+# Disparar os 4 hooks manualmente
+curl -fsSL -X POST "$RENDER_DEPLOY_HOOK_API"
+curl -fsSL -X POST "$RENDER_DEPLOY_HOOK_LANGGRAPH"
+curl -fsSL -X POST "$RENDER_DEPLOY_HOOK_NGINX"
+curl -fsSL -X POST "$RENDER_DEPLOY_HOOK_UI"
 ```
 
 ---
