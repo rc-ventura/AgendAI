@@ -14,6 +14,7 @@ def make_state(**kwargs) -> AgendAIState:
         "email_pending": False,
         "email_payload": None,
         "final_response": None,
+        "processed_tool_ids": [],
     }
     base.update(kwargs)
     return base

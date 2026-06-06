@@ -12,3 +12,4 @@ class AgendAIState(TypedDict):
     email_pending: bool
     email_payload: dict | None
     final_response: str | bytes | None
+    processed_tool_ids: list[str]  # tool_call_ids that already triggered an email

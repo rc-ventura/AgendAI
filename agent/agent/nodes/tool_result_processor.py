@@ -85,6 +85,10 @@ def process_tool_results(state: AgendAIState) -> dict:
     if tool_name is None:
         return {}
 
+    # Deduplication: skip if this tool call already triggered an email in this thread
+    if tool_call_id in (state.get("processed_tool_ids") or []):
+        return {}
+
     tool_msg = _get_tool_message(state, tool_call_id)
     if tool_msg is None:
         return {}
@@ -97,4 +101,5 @@ def process_tool_results(state: AgendAIState) -> dict:
     payment_data = _parse_json(payment_msg) if payment_msg else None
 
     payload = _build_email_payload(tool_name, tool_data, payment_data)
-    return {"email_pending": True, "email_payload": payload}
+    processed = list(state.get("processed_tool_ids") or []) + [tool_call_id]
+    return {"email_pending": True, "email_payload": payload, "processed_tool_ids": processed}

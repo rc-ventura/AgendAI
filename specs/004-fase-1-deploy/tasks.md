@@ -121,9 +121,9 @@ redeploy `api`); reopen the thread and re-query the appointment — both survive
 
 **Depends on**: Phase 2 (durable API data) + T029/T032 (server-backed checkpointer).
 
-- [ ] T039 [US2] Confirm idempotent startup: redeploy/restart `api` and verify schema runs without error and seed does **not** duplicate rows (count-guard) (FR-007)
-- [ ] T040 [US2] Local persistence test: with `docker compose` up, create an appointment and an in-progress thread; `docker compose restart langgraph-server`; reopen the thread → prior messages intact; re-query the appointment → still present (validates Postgres checkpointer, gap P2)
-- [ ] T041 [US2] Production persistence test: trigger a Render redeploy of `api` + `langgraph-server`; confirm previously created appointments remain retrievable and an active thread still shows prior messages (SC-002)
+- [X] T039 [US2] Confirm idempotent startup: redeploy/restart `api` and verify schema runs without error and seed does **not** duplicate rows (count-guard) (FR-007)
+- [X] T040 [US2] Local persistence test: with `docker compose` up, create an appointment and an in-progress thread; `docker compose restart langgraph-server`; reopen the thread → prior messages intact; re-query the appointment → still present (validates Postgres checkpointer, gap P2)
+- [X] T041 [US2] Production persistence test: trigger a Render redeploy of `api` + `langgraph-server`; confirm previously created appointments remain retrievable and an active thread still shows prior messages (SC-002)
 
 **Checkpoint**: State durability proven locally and in production.
 
@@ -159,9 +159,9 @@ enforced at the agent path.
 
 **Depends on**: T031 (nginx routing), T035 (render private services).
 
-- [ ] T047 [US4] Verify in `infra/render/render.yaml` that `api`, `langgraph-server`, and `agent-ui-pro` are private (no public URL) and only `nginx` is public; fix any service type that exposes a public route
-- [ ] T048 [US4] Verify auth scoping: requesting the UI/static assets through nginx needs no `x-api-key`, while agent paths (`/threads`,`/runs`,…) require it and are rate-limited; confirm SSE streams unbuffered (FR-004)
-- [ ] T049 [US4] Attempt to reach `api` and `langgraph-server` directly from the public internet and confirm there is no route (SC-007); confirm same-origin works with the CORS block removed
+- [X] T047 [US4] Verify in `infra/render/render.yaml` that `api`, `langgraph-server`, and `agent-ui-pro` are private (no public URL) and only `nginx` is public; fix any service type that exposes a public route
+- [X] T048 [US4] Verify auth scoping: requesting the UI/static assets through nginx needs no `x-api-key`, while agent paths (`/threads`,`/runs`,…) require it and are rate-limited; confirm SSE streams unbuffered (FR-004)
+- [X] T049 [US4] Attempt to reach `api` and `langgraph-server` directly from the public internet and confirm there is no route (SC-007); confirm same-origin works with the CORS block removed
 
 **Checkpoint**: Public surface reduced to the single gateway, verified.
 
@@ -176,8 +176,8 @@ LangSmith (quickstart §5 #6).
 
 **Depends on**: Phase 3 (agent deployed).
 
-- [ ] T050 [US5] Confirm tracing env on the deployed `langgraph-server`: `LANGCHAIN_TRACING_V2=true`, `LANGCHAIN_API_KEY`, `LANGCHAIN_PROJECT=AgendAI` (render-blueprint.md)
-- [ ] T051 [US5] Run a production conversation; confirm a trace including the agent's tool calls appears in the LangSmith dashboard; capture a screenshot for the README (SC-008, FR-018)
+- [X] T050 [US5] Confirm tracing env on the deployed `langgraph-server`: `LANGSMITH_TRACING=true`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT=AgendAI` (render-blueprint.md)
+- [X] T051 [US5] Run a production conversation; confirm a trace including the agent's tool calls appears in the LangSmith dashboard; capture a screenshot for the README (SC-008, FR-018)
 
 **Checkpoint**: Production behavior is observable.
 
@@ -187,11 +187,11 @@ LangSmith (quickstart §5 #6).
 
 **Purpose**: Secrets finalization, documentation, and cleanup spanning all stories.
 
-- [ ] T052 [P] Finalize secrets migration: confirm no secret values are committed anywhere added by this feature; all runtime secrets live in Render env vars and all CI secrets in GitHub Secrets (FR-014/SC-006)
-- [ ] T053 [P] Update `README.md`: CI status badge (green), production URL, and the LangSmith traces screenshot from T051 (FR-019)
+- [X] T052 [P] Finalize secrets migration: confirm no secret values are committed anywhere added by this feature; all runtime secrets live in Render env vars and all CI secrets in GitHub Secrets (FR-014/SC-006)
+- [X] T053 [P] Update `README.md`: CI status badge (green), production URL, and the LangSmith traces screenshot from T051 (FR-019)
 - [X] T054 [P] Update `CLAUDE.md` body to reflect SQLite→Postgres (`pg`), the LangGraph Server (Option B) topology, nginx single-edge routing, and the new env vars (the SPECKIT plan pointer is already set)
 - [X] T055 [P] Remove dead references to `better-sqlite3`/`DB_PATH`/SQLite from docs and any leftover comments; ensure `.env.example` matches the deployed env matrix exactly
-- [ ] T056 Run the full `quickstart.md` verification table (checks #1–#7) end to end and confirm every Success Criterion (SC-001…SC-009) is met
+- [X] T056 Run the full `quickstart.md` verification table (checks #1–#7) end to end and confirm every Success Criterion (SC-001…SC-009) is met
 
 ---
 
