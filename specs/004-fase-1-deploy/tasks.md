@@ -99,7 +99,7 @@ scheduling flow end to end; confirm an appointment + confirmation (quickstart.md
 - [X] T031 [US1] Rewrite `nginx/nginx.conf.template` into a path-routing reverse proxy: `location /` → `agent-ui-pro:3002` (incl. `/_next/...` and WebSocket upgrade); `location ~ ^/(threads|runs|assistants|store|info)` → `langgraph-server:8123` keeping `x-api-key` auth + `limit_req` + `proxy_buffering off`; **scope auth/rate-limit to the agent location only** (UI/assets unauthenticated); remove the `map $http_origin`/CORS block (research D7)
 - [X] T032 [US1] Update `docker-compose.yml`: swap the `agent` build for the `langgraph-server` image with env `DATABASE_URI`/`REDIS_URI`/`LANGSMITH_API_KEY`/`LANGCHAIN_API_KEY`/`OPENAI_API_KEY`/`API_BASE_URL`; point `api` at local `postgres` via `DATABASE_URL`; make **nginx the only service publishing a host port**; `agent-ui-pro` and `langgraph-server` no longer publish ports
 - [X] T033 [US1] Set `agent-ui-pro` build arg `NEXT_PUBLIC_API_URL` to the nginx origin (same-origin); keep `NEXT_PUBLIC_ASSISTANT_ID=agendai_agent` and `NEXT_PUBLIC_LANGGRAPH_API_KEY=${LANGGRAPH_AUTH_TOKEN}`
-- [ ] T034 [US1] Local verify: `docker compose up --build -d` brings up api + postgres + redis + langgraph-server + nginx + agent-ui-pro; open the app through nginx; complete a text and an audio scheduling flow; confirm streaming is not buffered (quickstart.md §1)
+- [X] T034 [US1] Local verify: `docker compose up --build -d` brings up api + postgres + redis + langgraph-server + nginx + agent-ui-pro; open the app through nginx; complete a text and an audio scheduling flow; confirm streaming is not buffered (quickstart.md §1)
 
 ### Render deploy
 
