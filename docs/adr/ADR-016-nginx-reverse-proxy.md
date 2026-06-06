@@ -18,7 +18,7 @@ Inserir um **proxy reverso Nginx** (`nginx:1.27-alpine`) como único ponto de en
 1. **Autenticação via `x-api-key`**: header validado contra `LANGGRAPH_AUTH_TOKEN`. Falha fechado — se token não configurado, retorna 500.
 2. **Rate limiting**: 20 req/min por IP, burst de 10 sem delay (`limit_req zone=agent_limit burst=10 nodelay`).
 3. **CORS restrito**: apenas `http://localhost:3002` (Agent UI) autorizado como origem.
-4. **Streaming SSE**: `proxy_buffering off`, `proxy_cache off`, `proxy_read_timeout 300s`, `chunked_transfer_encoding on`.
+4. **Streaming SSE**: `proxy_buffering off`, `proxy_cache off`, `proxy_read_timeout 300s`, `chunked_transfer_encoding off`, `gzip off`, `proxy_max_temp_file_size 0` (ver Lessons Learned).
 5. **Preflight OPTIONS**: responde 204 sem encaminhar ao agente.
 
 ### Portas expostas e não expostas
@@ -65,6 +65,42 @@ Inserir um **proxy reverso Nginx** (`nginx:1.27-alpine`) como único ponto de en
 2. **Autenticação por usuário** — `x-api-key` estático não escala para multi-tenancy.
 3. **Escala horizontal do agente** — nginx precisaria de `upstream` com múltiplos `agent` containers e `ip_hash` para sticky sessions.
 
+## Lessons Learned — SSE buffering em produção (2026-06-06)
+
+### Problema observado
+
+Em produção no Render, o stream LangGraph chegava ao browser em **blocos irregulares** ("trava, cospe texto, trava") — comportamento inexistente no Docker local. O nginx local já tinha `proxy_buffering off`, mas o problema persistia.
+
+### Investigação
+
+Análise da documentação oficial nginx.org e artigos de produção (OneUptime 2025, Medium/DSherwin) revelou **três defaults de proxy que quebram SSE**:
+
+1. **`chunked_transfer_encoding on` (nosso caso)** — nginx pode agrupar múltiplos eventos SSE num único chunk HTTP antes de enviar ao cliente, causando o efeito "burst". O correto para SSE é `off`.
+2. **`gzip` ativo** — compressão é incompatível com streaming de eventos; quebra a delimitação `data: ...\n\n`.
+3. **`proxy_max_temp_file_size` não zerado** — nginx pode usar arquivo temporário em disco como buffer secundário mesmo com `proxy_buffering off`.
+
+O Render LB (load balancer da plataforma) também foi investigado: confirmado como buffer adicional pela comunidade (threads desde 2022), **sem solução exposta ao usuário**. Remover o nginx não resolve — o Render LB permanece na frente de qualquer serviço público.
+
+### Sobre `X-Accel-Buffering`
+
+`X-Accel-Buffering: no` é um header que o **backend** envia para o nginx local desabilitar seu buffering. Não é um header que nginx deve adicionar para afetar proxies upstream — a direção é inversa. Como já temos `proxy_buffering off`, o header é redundante no nosso caso. Tentativa de adicioná-lo via `add_header` no nginx não teria efeito no Render LB.
+
+### Correção aplicada
+
+No `location` do agente adicionados três diretivas que sobrescrevem o global:
+
+```nginx
+chunked_transfer_encoding off;   # impede agrupamento de eventos SSE em chunks HTTP
+gzip                      off;   # evita compressão incompatível com text/event-stream
+proxy_max_temp_file_size  0;     # zera buffer secundário em disco
+```
+
+A diretiva `chunked_transfer_encoding on` permanece no contexto global para o `location /` (UI Next.js), onde chunked é desejável.
+
+### Causa raiz remanescente
+
+O Render LB bufferiza SSE independentemente de qualquer configuração nginx. O comportamento "não fluido" residual em produção é atribuído à **latência geográfica Brasil → Oregon (~160ms/RTT)**, não eliminável por configuração de proxy. Migrar para a região `ohio` ou `virginia` no Render reduziria ~30ms por RTT.
+
 ## Referências
 
 - `nginx/nginx.conf.template` — configuração completa
@@ -72,3 +108,6 @@ Inserir um **proxy reverso Nginx** (`nginx:1.27-alpine`) como único ponto de en
 - `docker-compose.yml:37-47` — serviço nginx
 - ADR-013: `langgraph dev` como servidor
 - ADR-017: segurança da API e token LangGraph
+- [How to Configure SSE Through Nginx — OneUptime (2025)](https://oneuptime.com/blog/post/2025-12-16-server-sent-events-nginx/view)
+- [Surviving SSE Behind Nginx Proxy Manager — Medium](https://medium.com/@dsherwin/surviving-sse-behind-nginx-proxy-manager-npm-a-real-world-deep-dive-69c5a6e8b8e5)
+- [SSE continually buffering — Render Community](https://render.discourse.group/t/sse-continually-buffering/3840)
