@@ -17,4 +17,14 @@ async def transcribe_audio(state: AgendAIState) -> dict:
         model="whisper-1",
         file=audio_file,
     )
-    return {"messages": [HumanMessage(content=transcript.text)]}
+
+    # Replace the UI's audio placeholder message instead of appending a new one.
+    # add_messages updates in-place when the returned message shares the same id.
+    last_human = next(
+        (m for m in reversed(state.get("messages", [])) if getattr(m, "type", None) == "human"),
+        None,
+    )
+    msg_id = last_human.id if last_human and last_human.id else None
+    transcribed = HumanMessage(content=transcript.text, id=msg_id) if msg_id else HumanMessage(content=transcript.text)
+
+    return {"messages": [transcribed], "audio_data": None}

@@ -1,4 +1,4 @@
-limit_req_zone $binary_remote_addr zone=agent_limit:10m rate=20r/m;
+limit_req_zone $binary_remote_addr zone=agent_limit:10m rate=60r/m;
 
 # Defer upstream DNS resolution to request time so nginx starts even if
 # downstream services are still booting (common on Render free tier).
@@ -43,7 +43,7 @@ server {
         }
 
         # Rate limiting: 20 req/min, burst de 10 sem delay
-        limit_req        zone=agent_limit burst=10 nodelay;
+        limit_req        zone=agent_limit burst=30 nodelay;
         limit_req_status 429;
 
         # SSE: desabilita buffering para streaming token-a-token
