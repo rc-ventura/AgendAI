@@ -1,4 +1,11 @@
-limit_req_zone $binary_remote_addr zone=agent_limit:10m rate=60r/m;
+# CF-Connecting-IP contains the real client IP set by Cloudflare (Render uses CF as CDN).
+# $binary_remote_addr is always 127.0.0.1 on Render (internal loopback routing),
+# which would make all users share one bucket — using CF header fixes per-user limiting.
+map $http_cf_connecting_ip $rate_limit_key {
+    default $http_cf_connecting_ip;
+    ""      $binary_remote_addr;     # fallback para Docker local (sem Cloudflare)
+}
+limit_req_zone $rate_limit_key zone=agent_limit:10m rate=60r/m;
 
 # Defer upstream DNS resolution to request time so nginx starts even if
 # downstream services are still booting (common on Render free tier).
@@ -70,5 +77,15 @@ server {
         # Full URL including scheme: http://... (local) or https://... (Render).
         set $ui_upstream "${UI_UPSTREAM}";
         proxy_pass $ui_upstream;
+
+        # Se a UI retornar 429 (Render free tier hibernando), exibe página de espera
+        # em vez de repassar o 429 ao browser.
+        proxy_intercept_errors on;
+        error_page 429 503 502 /warming.html;
+    }
+
+    location = /warming.html {
+        root /usr/share/nginx/html;
+        internal;
     }
 }
