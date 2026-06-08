@@ -4,7 +4,7 @@
 
 **Created**: 2026-06-03
 
-**Updated**: 2026-06-03
+**Updated**: 2026-06-07
 
 **Status**: Draft
 
@@ -16,17 +16,18 @@ e observações de produção na Fase 1 (Render). Baseado nos whitepapers *Proto
 
 ## Why This Feature Exists
 
-O AgendAI está em produção na Fase 1 (Render + GitHub Actions). A análise de gaps agênticos
-identificou que, apesar de funcionar, o sistema não é production-grade em sete dimensões:
-resiliência a falhas, persistência de sessão, identidade de usuário, segurança de conteúdo
-(input e output), observabilidade, gerenciamento de contexto e memória de longo prazo. Cada
-gap transforma um problema isolado em degradação visível ao usuário ou risco de segurança.
+O AgendAI está em produção na Fase 1 (Render + GitHub Actions). Esta spec foca nos gaps
+que podem ser endereçados **sem autenticação de usuário**: resiliência a falhas, segurança
+de conteúdo, observabilidade, gerenciamento de contexto e performance.
 
-Esta spec endereça os 7 gaps em ordem de impacto × esforço.
+Gaps dependentes de identidade de usuário (sessão persistente, memória de longo prazo,
+HITL com interrupt) foram separados em specs dedicadas:
+- **Spec 006** — Autenticação + sessão persistente por usuário
+- **Spec 007** — Memória de longo prazo + Human-in-the-Loop
 
 ---
 
-## Gaps Mapeados (P1 → P7)
+## Gaps Mapeados (P1, P4, P5, P6, P8)
 
 ### P1 — Retry + Circuit Breaker
 
@@ -42,43 +43,6 @@ Render) encerra o run do grafo permanentemente. `tts.py` e `email_sender.py` já
 - `agent/agent/api_client.py` — retry tenacity (só `ConnectError`/`TimeoutException`, não 4xx)
 - `api/src/db/connection.js` — async-retry no startup (5x, até 30s)
 - `api/src/repositories/*.js` — p-retry em queries transientes
-
----
-
-### P2 — Sessão persistente por usuário
-
-**Problema:** `InMemoryCheckpointer` (ADR-014) reseta em restart. Conversas não sobrevivem a
-redeploys. Cada restart do `langgraph-server` apaga o histórico de todos os threads.
-
-**Decisão:** Migrar para `PostgresSaver` (Fase 1-2) ou Vertex AI Agent Engine Sessions (Fase 3).
-Cada conversa ganha um `thread_id` por `user_id` e sobrevive a restarts.
-
-**Nota:** Na Fase 1 com LangGraph Server, o checkpointer Postgres já é provido pelo servidor.
-O gap real é a falta de `user_id` para isolar threads por usuário — bloqueado pelo P3 (auth).
-
-**Evolução por fase:**
-```
-Fase 1 (agora): InMemoryCheckpointer → reseta em restart
-Fase 2:         PostgresSaver(DATABASE_URL) → persiste, isolado por thread_id
-Fase 3:         Vertex AI Agent Engine Sessions → managed, HIPAA compliant
-```
-
----
-
-### P3 — Autenticação de usuário
-
-**Problema:** Só existe token de serviço compartilhado (`LANGGRAPH_AUTH_TOKEN`). Sem identidade
-de usuário, sem JWT, sem sessão individual. Qualquer um com o token acessa dados de todos.
-
-**Decisão:** Clerk (free tier) ou Auth0 — o `user_id` autenticado passa a ser o `thread_id`
-do checkpointer LangGraph, conectando sessão, memória e auditoria. Desbloqueia P2 e P7.
-
-**Evolução por fase:**
-```
-Fase 1: token fixo compartilhado
-Fase 2: Clerk/Auth0 JWT → nginx valida → user_id no contexto do agente
-Fase 3: Amazon Cognito / Firebase Auth (free até 50k MAU)
-```
 
 ---
 
@@ -193,86 +157,6 @@ def trim_context(messages: list, llm) -> list:
 Fase 1/2: sliding window + summarization manual
 Fase 3:   Vertex AI Memory Bank → extração semântica automática via Gemini
           → contexto enriquecido com fatos relevantes do paciente
-```
-
----
-
-### P7 — Memory Management (user, episodic, procedural)
-
-**Problema:** O agente não tem memória além da conversa atual. Não sabe que o paciente João
-prefere consultas às sextas, que já cancelou 2 vezes, ou que tem convênio Unimed. Cada sessão
-começa do zero — a experiência não melhora com o uso.
-
-**Três tipos de memória agêntica** (baseado em *Context Engineering: Sessions & Memory*,
-Google Cloud, 2025):
-
-#### Memória Episódica (curto prazo — o que aconteceu nesta conversa)
-
-- **O que é:** Histórico da conversa atual — mensagens, tool calls, resultados
-- **Status atual:** Existe via LangGraph checkpointer, mas sem `user_id` (gap do P2/P3)
-- **Upgrade:** Após P2+P3, cada paciente tem seu thread isolado que persiste entre sessões
-- **Fase 3:** Vertex AI Agent Engine Sessions — managed, isolado por user, HIPAA compliant
-
-```python
-# Com PostgresSaver (Fase 2):
-checkpointer = PostgresSaver.from_conn_string(DATABASE_URL)
-graph = workflow.compile(checkpointer=checkpointer)
-# thread_id = user_id → cada paciente tem seu histórico
-```
-
-#### Memória de Usuário (longo prazo — fatos sobre o paciente)
-
-- **O que é:** Fatos semânticos extraídos das conversas e armazenados persistentemente.
-  Exemplo: "prefere manhã", "tem fobia de dentista", "usa convênio Amil"
-- **Status atual:** Não existe
-- **Fase 2:** Tabela `patient_memory` no Postgres + extração manual via prompt
-- **Fase 3:** Vertex AI Memory Bank (GA) — extração semântica automática via Gemini,
-  busca por relevância, sem pipeline ETL manual
-
-```python
-# Fase 2 — extração manual:
-def extract_user_facts(messages: list, llm) -> list[str]:
-    return llm.invoke(EXTRACT_FACTS_PROMPT + messages)
-
-# Fase 3 — Vertex AI Memory Bank:
-memory = MemoryBankServiceClient()
-user_context = memory.retrieve_memories(
-    agent_engine_id=RUNTIME_ID,
-    user_id=state.user_id,
-    query=state.input
-)
-system_prompt = f"{BASE_PROMPT}\n\nContexto do paciente:\n{user_context}"
-```
-
-#### Memória Procedural (como o agente deve se comportar)
-
-- **O que é:** Regras, personalidade, fluxos e ferramentas do agente — encoded no system
-  prompt e na definição do grafo LangGraph
-- **Status atual:** Existe implicitamente no system prompt de `llm_core.py` e nos nós do grafo
-- **Gap:** Não é versionada nem testada explicitamente como "memória"
-- **Upgrade:** Externalizar o system prompt para arquivo versionado + testes de comportamento
-  que verificam que o agente segue as regras procedurais
-
-```python
-# agent/agent/prompts/system_prompt.py (versionado)
-SYSTEM_PROMPT = """
-Você é o assistente de agendamento da Clínica AgendAI.
-Regras:
-1. Só agende consultas para pacientes cadastrados no sistema
-2. Confirme sempre data, hora e médico antes de criar o agendamento
-3. Nunca revele dados de outros pacientes
-"""
-```
-
-**Evolução da memória por fase:**
-
-```
-           | Episódica        | Usuário              | Procedural
------------|------------------|----------------------|------------------
-Fase 1     | InMemory (reset) | Não existe           | System prompt fixo
-Fase 2     | PostgresSaver    | Tabela patient_memory| Arquivo versionado
-Fase 3     | Agent Engine     | Vertex Memory Bank   | + testes de comportamento
-           | Sessions (GCP)   | (extração automática)|
 ```
 
 ---
@@ -415,68 +299,6 @@ seria escrito para esses gaps.
 
 ---
 
-### P9 — Human-in-the-Loop (HITL)
-
-**Problema:** O agente executa ações irreversíveis (criar agendamento, cancelar consulta)
-diretamente, sem pedir confirmação ao usuário. Um mal-entendido do LLM pode criar ou cancelar
-uma consulta que o paciente não queria.
-
-**O que é HITL:** O grafo pausa a execução antes de uma tool call crítica, apresenta os
-detalhes ao usuário e só prossegue com aprovação explícita.
-
-**Duas abordagens:**
-
-**A) `HumanInTheLoopMiddleware` (via `create_agent` — LangChain v1):**
-```python
-HumanInTheLoopMiddleware(
-    interrupt_on={
-        "criar_agendamento": True,   # pausa antes de criar
-        "cancelar_agendamento": True  # pausa antes de cancelar
-    }
-)
-```
-O middleware intercepta em `after_model` (após o LLM decidir usar a tool, antes de executar).
-
-**B) `interrupt()` nativo do LangGraph (sem `create_agent`):**
-```python
-from langgraph.types import interrupt
-
-async def confirm_action(state: AgendAIState) -> dict:
-    if state.get("email_payload"):
-        decision = interrupt({
-            "message": "Confirmar agendamento?",
-            "medico": state["email_payload"]["medico_nome"],
-            "data_hora": state["email_payload"]["data_hora"],
-        })
-        if not decision["confirmed"]:
-            return {"email_pending": False, "email_payload": None}
-    return state
-```
-
-**Fluxo com HITL:**
-```
-chat_with_llm → [LLM decide criar agendamento]
-      ↓
- HITL check ──── pausa SSE ────► UI mostra confirmação ao paciente
-      │                               │
-      │                        paciente confirma
-      │                               │
-      └──────── resume ───────────────┘
-      ↓
-execute_tools → criar_agendamento → process_tool_results → send_email
-```
-
-**Requisito:** HITL com `interrupt()` requer checkpointer persistente (PostgresSaver) para
-salvar o estado enquanto aguarda resposta — bloqueado por P2.
-Com `HumanInTheLoopMiddleware` via `create_agent`, o gerenciamento de estado é interno.
-
-**Impacto:**
-- Elimina agendamentos/cancelamentos acidentais por erro de interpretação do LLM
-- Melhora confiança do usuário no sistema
-- Requisito de segurança para uso em ambiente médico real
-
----
-
 ## Quick Wins de Performance — descobertos em produção (Spec 004)
 
 > Itens identificados durante a operação em produção no Render (junho 2026). Nenhum deles
@@ -568,15 +390,14 @@ Com GPT-4o Realtime (médio prazo):
 | P | Gap | Esforço | Impacto | Fase | Status |
 |---|-----|---------|---------|------|--------|
 | P1 | Retry + Circuit Breaker | ~2h | Elimina erros silenciosos em produção | 1/2 | ADR-024 |
-| P2 | Sessão persistente | ~2h | Conversas sobrevivem a restarts | 1/2 | Bloqueado por P3 |
-| P3 | Auth de usuário | ~1 dia | Identidade + segurança | 2 | Desbloqueia P2/P7/P9 |
-| P4 | Guardrails input+output | ~4h | Segurança de conteúdo | 2/3 | Simplificado por P8 |
-| P5 | Logs estruturados | ~3h | Observabilidade end-to-end | 2 | — |
+| P4 | Guardrails input+output | ~4h | Segurança de conteúdo | 1/2 | Simplificado por P8 |
+| P5 | Logs estruturados | ~3h | Observabilidade end-to-end | 1/2 | — |
 | P6 | Context Manager | ~3h | Custo + latência em conv. longas | 2 | Simplificado por P8 |
-| P7 | Memory Management | ~1 semana | Experiência personalizada | 2/3 | Bloqueado por P2/P3 |
-| P8 | `create_agent` + Middleware | ~1 dia | Menos boilerplate, simplifica P4/P6/P9 | 2 | Aguardar estabilidade LC v1.1 |
-| P9 | Human-in-the-Loop (HITL) | ~4h | Elimina ações irreversíveis acidentais | 2 | Bloqueado por P2 (interrupt) |
-| P10 | Migração do managed server → FastAPI próprio | ~3 dias | Controle total do checkpointer (habilita Padrões A/C/D sem restrição) | 3 | Ativar só se: QW-3 rejeitado pelo server E checkpoint for gargalo dominante pós-QW-1/4 |
+| P8 | `create_agent` + Middleware | ~1 dia | Menos boilerplate, simplifica P4/P6 | 2 | Aguardar estabilidade LC v1.1 |
+| P10 | Migração do managed server → FastAPI próprio | ~3 dias | Controle total do checkpointer | 3 | Ativar só se: QW-3 rejeitado E checkpoint gargalo após QW-1/4 |
+| — | Auth + sessão persistente | — | — | — | → [Spec 006](../../specs/006-auth-session/) |
+| — | Memory Management | — | — | — | → [Spec 007](../../specs/007-memory-hitl/) |
+| — | Human-in-the-Loop (HITL) | — | — | — | → [Spec 007](../../specs/007-memory-hitl/) |
 
 ---
 
@@ -600,48 +421,38 @@ Com GPT-4o Realtime (médio prazo):
 2. Token count do contexto enviado ao LLM ≤ limite configurado
 3. Resumo preserva fatos críticos (agendamentos feitos, cancelamentos, preferências)
 
-### P7 (Memory Management — Fase 2)
-1. Após agendamento, fato "paciente agendou com Dr. X" é salvo na memória do usuário
-2. Na próxima sessão, o agente sabe que o paciente já consultou antes
-3. Memória episódica (thread) sobrevive a restart do servidor (bloqueado por P2+P3)
-
 ---
 
-## Dependências entre gaps
+## Dependências entre gaps desta spec
 
 ```
-P3 (auth) ──────────────────────► P2 (sessão por user_id)
-                                        │
-                                        ▼
-                                   P7 (memória — precisa de user_id para isolar)
-
 P1 (retry) ─── independente ──── pode implementar agora
 
 P4 (guardrails) ─── independente ─── pode implementar agora (Bedrock na Fase 3)
 
 P5 (logs) ─── independente ──── pode implementar agora
 
-P6 (context) ─── parcialmente independente ─── não precisa de P3, mas se beneficia de P7
+P6 (context) ─── independente de auth ─── pode implementar agora
 
-P8 (create_agent + middleware) ─── recomendado antes de P4/P6/P9
+P8 (create_agent + middleware) ─── recomendado antes de P4/P6
    ├─ PIIMiddleware           → substitui nós manuais de P4
-   ├─ SummarizationMiddleware → substitui código manual de P6
-   └─ HumanInTheLoopMiddleware → alternativa ao interrupt() de P9
+   └─ SummarizationMiddleware → substitui código manual de P6
 
-P9 (HITL interrupt) ─── bloqueado por P2 (checkpointer persistente necessário)
-                    └─ ou via HumanInTheLoopMiddleware (P8) sem depender de P2
+P10 (migração managed server) ─── condicional: só se QW-3 falhar E checkpoint gargalo
 ```
 
 ---
 
-## Out of Scope desta spec (Fases 2/3 ou Specs separadas)
+## Out of Scope desta spec
 
-- Terraform / Cloud IaC → Spec 006
-- Vertex AI Memory Bank (extração automática) → Spec 007
-- AWS Bedrock Guardrails (managed) → Spec 007
-- Vertex AI Agent Engine Sessions → Spec 007
-- Amazon Cognito / Firebase Auth → pode ser P3 desta spec ou Spec 007
-- Vertex AI Evaluation (quality gate no CI/CD) → Spec 007
+- Autenticação de usuário → [Spec 006](../../specs/006-auth-session/spec.md)
+- Sessão persistente por usuário → [Spec 006](../../specs/006-auth-session/spec.md)
+- Memory Management → [Spec 007](../../specs/007-memory-hitl/spec.md)
+- Human-in-the-Loop (HITL) → [Spec 007](../../specs/007-memory-hitl/spec.md)
+- Vertex AI Memory Bank → Spec 007 ou posterior
+- AWS Bedrock Guardrails (managed) → Spec 007 ou posterior
+- Vertex AI Agent Engine Sessions → Spec 007 ou posterior
+- Terraform / Cloud IaC → Spec futura
 
 ## Referências
 
