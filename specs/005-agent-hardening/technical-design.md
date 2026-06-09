@@ -174,13 +174,16 @@ Fase 3:   Vertex AI Memory Bank → extração semântica automática via Gemini
 > (`StateGraph`, nós, arestas) são **inalterados** — não há breaking change no grafo em si.
 > O que muda é a camada de orquestração acima do grafo: o sistema de **middleware**.
 >
-> Atenção: o `create_agent` foi removido em `langchain v1.1.0` sem aviso prévio — monitorar
-> o changelog antes de implementar. Os primitivos do LangGraph permanecem estáveis.
+> **Correção (2026-06-09)**: uma versão anterior desta nota afirmava que `create_agent` "foi
+> removido em `langchain v1.1.0` sem aviso". **Isso é FALSO** — verificação na fonte primária
+> mostra que `create_agent` é o método oficial e recomendado do LangChain v1, e a v1.1 o expande.
+> O relato de "removido" foi um erro de ambiente (pacotes stale) num post de fórum, depois
+> desmentido pela comunidade. Os primitivos do LangGraph permanecem estáveis.
 >
 > **Decisão registrada em [ADR-026](../../docs/adr/ADR-026-create-agent-middleware-vs-manual.md)**:
-> middleware é a abordagem **preferida** para P1/P4/P6, condicionada a um gate de estabilidade;
-> se falhar, fallback para nós manuais (especificados nas seções P4 e P6 acima). A adoção de
-> `MessagesState` é estável e independente do gate.
+> adotar `create_agent` + middleware como caminho padrão para P1/P4/P6 (`PIIMiddleware`,
+> `SummarizationMiddleware`, `ModelRetryMiddleware`) — é o caminho oficial estável. `MessagesState`
+> é aditivo e compatível. Injection/off-scope exigem middleware custom ou NeMo (não são built-in).
 
 **Problema:** O grafo atual (`graph.py`) implementa manualmente lógica que o novo sistema de
 middleware do LangChain v1 provê como prebuilt: retry de LLM, summarização de contexto,
@@ -456,7 +459,7 @@ Com GPT-4o Realtime (médio prazo):
 | P4 | Guardrails input+output | ~4h | Segurança de conteúdo | 1/2 | Simplificado por P8 |
 | P5 | Logs estruturados | ~3h | Observabilidade end-to-end | 1/2 | — |
 | P6 | Context Manager | ~3h | Custo + latência em conv. longas | 2 | Simplificado por P8 |
-| P8 | `create_agent` + Middleware | ~1 dia | Menos boilerplate, simplifica P4/P6 | 2 | ADR-026 — preferida c/ gate de estabilidade; fallback nós manuais |
+| P8 | `create_agent` + Middleware | ~1 dia | Menos boilerplate, simplifica P4/P6 | 2 | ADR-026 — adotar (caminho oficial estável) |
 | P10 | Migração do managed server → FastAPI próprio | ~3 dias | Controle total do checkpointer | 3 | Ativar só se: QW-3 rejeitado E checkpoint gargalo após QW-1/4 |
 | — | Auth + sessão persistente | — | — | — | → [Spec 006](../../specs/006-auth-session/) |
 | — | Memory Management | — | — | — | → [Spec 007](../../specs/007-memory-hitl/) |

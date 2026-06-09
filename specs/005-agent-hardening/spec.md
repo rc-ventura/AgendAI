@@ -235,7 +235,9 @@ full path within minutes.
   persist durably only the selected long-lived data needed for recovery — full-state writes MUST
   NOT block the patient's response between conversation phases.
 - **FR-011**: System SHOULD reuse the result of an identical, repeated lookup within the same
-  conversation instead of recomputing it.
+  conversation instead of recomputing it. Cached reads MUST NOT serve stale data: results that can
+  change due to a write (availability, appointments) MUST be excluded from caching or invalidated
+  after the relevant write — consistent with the cache-after-commit rule.
 - **FR-012**: System SHOULD select the AI models (for text and for the voice path) that minimize
   response latency and per-request cost while preserving reliable tool-calling and acceptable
   transcription/synthesis quality.
@@ -356,15 +358,14 @@ full path within minutes.
   (a faster transcription provider can cut several seconds with no architecture change); a fully
   real-time voice model is a larger, later change. Details in
   [technical-design.md](./technical-design.md) (QW-6).
-- **Framework modernization (P8) is the preferred implementation approach, not a user story**:
-  the safety (FR-014/015), context (FR-018/019) and retry (FR-001) requirements are intended to
-  be delivered via the newer agent middleware (prebuilt PII, summarization, and retry behaviors)
-  rather than hand-written nodes — one implementation instead of repeated manual code. This is a
-  *how*, not a *what*, so it is an approach decision, not a requirement. It is **conditional on a
-  stability gate**: the middleware API was removed once without notice, so if it is unstable when
-  P4/P6 are implemented, those requirements fall back to manual nodes (fully specified in the
-  technical design). The stable, gate-independent part (adopting `MessagesState`) proceeds
-  regardless. Decision and gate recorded in
+- **Framework modernization (P8) is the chosen implementation approach, not a user story**:
+  the safety (FR-014/015), context (FR-018/019) and retry (FR-001) requirements are delivered via
+  the LangChain agent **middleware** (`PIIMiddleware`, `SummarizationMiddleware`,
+  `ModelRetryMiddleware`) rather than hand-written nodes — one implementation instead of repeated
+  manual code. This is a *how*, not a *what*. `create_agent` + middleware is the **official, stable**
+  way to build agents in LangChain v1 (an earlier claim that it was "removed in v1.1.0" was a
+  factual error — corrected, see ADR-026). Manual nodes remain only as the legacy fallback for any
+  gap middleware doesn't cover (e.g., injection/off-scope, which are not built-in). Decision in
   [ADR-026](../../docs/adr/ADR-026-create-agent-middleware-vs-manual.md).
 - **Cold-start keep-alive is optional**: on the free hosting tier, an external uptime pinger can
   keep services awake to avoid cold-start delay. It is an operational workaround (no code) that
@@ -394,9 +395,9 @@ full path within minutes.
   underpins US1 / FR-001–FR-006.
 - [ADR-025 — LangGraph Checkpoint Strategy](../../docs/adr/ADR-025-langgraph-checkpoint-strategy.md)
   underpins US2 / FR-009–FR-010.
-- [ADR-026 — create_agent + middleware vs. manual nodes](../../docs/adr/ADR-026-create-agent-middleware-vs-manual.md)
-  records the preferred implementation approach (with stability gate) for FR-001 / FR-014–FR-015 /
-  FR-018–FR-019.
+- [ADR-026 — create_agent + middleware](../../docs/adr/ADR-026-create-agent-middleware-vs-manual.md)
+  records the chosen implementation approach (adopt the official middleware) for FR-001 /
+  FR-014–FR-015 / FR-018–FR-019.
 - [learning-lessons/arquitetura_redis_postgress.md](../../docs/learning-lessons/arquitetura_redis_postgress.md)
   — latency hierarchy and Redis/Postgres findings informing US2.
 - [AgendAI Constitution](../../.specify/memory/constitution.md) — Principles II (TDD), IV
