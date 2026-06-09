@@ -356,10 +356,16 @@ full path within minutes.
   (a faster transcription provider can cut several seconds with no architecture change); a fully
   real-time voice model is a larger, later change. Details in
   [technical-design.md](./technical-design.md) (QW-6).
-- **Framework modernization is an enabler, not a user story**: adopting the newer agent
-  middleware can simplify the safety and context work (it provides prebuilt PII, summarization,
-  and retry behaviors), but adoption must track upstream library stability before it is relied
-  upon. It carries no user-facing requirement of its own.
+- **Framework modernization (P8) is the preferred implementation approach, not a user story**:
+  the safety (FR-014/015), context (FR-018/019) and retry (FR-001) requirements are intended to
+  be delivered via the newer agent middleware (prebuilt PII, summarization, and retry behaviors)
+  rather than hand-written nodes — one implementation instead of repeated manual code. This is a
+  *how*, not a *what*, so it is an approach decision, not a requirement. It is **conditional on a
+  stability gate**: the middleware API was removed once without notice, so if it is unstable when
+  P4/P6 are implemented, those requirements fall back to manual nodes (fully specified in the
+  technical design). The stable, gate-independent part (adopting `MessagesState`) proceeds
+  regardless. Decision and gate recorded in
+  [ADR-026](../../docs/adr/ADR-026-create-agent-middleware-vs-manual.md).
 - **Cold-start keep-alive is optional**: on the free hosting tier, an external uptime pinger can
   keep services awake to avoid cold-start delay. It is an operational workaround (no code) that
   becomes unnecessary on a paid tier; reliability against cold starts is already required via
@@ -388,6 +394,9 @@ full path within minutes.
   underpins US1 / FR-001–FR-006.
 - [ADR-025 — LangGraph Checkpoint Strategy](../../docs/adr/ADR-025-langgraph-checkpoint-strategy.md)
   underpins US2 / FR-009–FR-010.
+- [ADR-026 — create_agent + middleware vs. manual nodes](../../docs/adr/ADR-026-create-agent-middleware-vs-manual.md)
+  records the preferred implementation approach (with stability gate) for FR-001 / FR-014–FR-015 /
+  FR-018–FR-019.
 - [learning-lessons/arquitetura_redis_postgress.md](../../docs/learning-lessons/arquitetura_redis_postgress.md)
   — latency hierarchy and Redis/Postgres findings informing US2.
 - [AgendAI Constitution](../../.specify/memory/constitution.md) — Principles II (TDD), IV

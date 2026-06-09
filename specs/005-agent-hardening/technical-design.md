@@ -176,6 +176,11 @@ Fase 3:   Vertex AI Memory Bank → extração semântica automática via Gemini
 >
 > Atenção: o `create_agent` foi removido em `langchain v1.1.0` sem aviso prévio — monitorar
 > o changelog antes de implementar. Os primitivos do LangGraph permanecem estáveis.
+>
+> **Decisão registrada em [ADR-026](../../docs/adr/ADR-026-create-agent-middleware-vs-manual.md)**:
+> middleware é a abordagem **preferida** para P1/P4/P6, condicionada a um gate de estabilidade;
+> se falhar, fallback para nós manuais (especificados nas seções P4 e P6 acima). A adoção de
+> `MessagesState` é estável e independente do gate.
 
 **Problema:** O grafo atual (`graph.py`) implementa manualmente lógica que o novo sistema de
 middleware do LangChain v1 provê como prebuilt: retry de LLM, summarização de contexto,
@@ -451,7 +456,7 @@ Com GPT-4o Realtime (médio prazo):
 | P4 | Guardrails input+output | ~4h | Segurança de conteúdo | 1/2 | Simplificado por P8 |
 | P5 | Logs estruturados | ~3h | Observabilidade end-to-end | 1/2 | — |
 | P6 | Context Manager | ~3h | Custo + latência em conv. longas | 2 | Simplificado por P8 |
-| P8 | `create_agent` + Middleware | ~1 dia | Menos boilerplate, simplifica P4/P6 | 2 | Aguardar estabilidade LC v1.1 |
+| P8 | `create_agent` + Middleware | ~1 dia | Menos boilerplate, simplifica P4/P6 | 2 | ADR-026 — preferida c/ gate de estabilidade; fallback nós manuais |
 | P10 | Migração do managed server → FastAPI próprio | ~3 dias | Controle total do checkpointer | 3 | Ativar só se: QW-3 rejeitado E checkpoint gargalo após QW-1/4 |
 | — | Auth + sessão persistente | — | — | — | → [Spec 006](../../specs/006-auth-session/) |
 | — | Memory Management | — | — | — | → [Spec 007](../../specs/007-memory-hitl/) |
@@ -519,4 +524,6 @@ P10 (migração managed server) ─── condicional: só se QW-3 falhar E chec
 - [Middleware Overview](https://docs.langchain.com/oss/python/langchain/middleware/overview)
 - [How Middleware Lets You Customize Your Agent Harness](https://www.langchain.com/blog/how-middleware-lets-you-customize-your-agent-harness)
 - [ADR-024 — Retry e Resiliência](../../docs/adr/ADR-024-retry-resilience-strategy.md)
+- [ADR-025 — Estratégia de Checkpoint](../../docs/adr/ADR-025-langgraph-checkpoint-strategy.md)
+- [ADR-026 — create_agent + middleware vs. nós manuais](../../docs/adr/ADR-026-create-agent-middleware-vs-manual.md)
 - [Architecture Roadmap V2.0](../../docs/AgendAI_Architecture_Roadmap.pdf)
