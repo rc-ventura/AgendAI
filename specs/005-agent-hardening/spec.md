@@ -78,11 +78,18 @@ the patient's critical path.
 without this slice, so it ranks below reliability — but perceived speed strongly shapes whether
 patients complete a booking.
 
+Speed also depends on the AI models chosen and the voice path: the current transcription and
+speech-synthesis steps add several seconds to a voice interaction, and faster/cheaper models
+exist for both text and audio. Choosing models that minimize latency and cost — without losing
+reliable tool-calling or transcription quality — is part of making responses feel fast and
+keeping the per-conversation cost sustainable.
+
 **Independent Test**: Measure end-to-end latency for a standard text scheduling request against
 the current production baseline, and confirm a meaningful reduction with no perceptible
 multi-second stalls between phases of the streamed answer. Separately, count the durable-storage
 write operations on the critical path and confirm they drop substantially while conversation
-recovery still works.
+recovery still works. For the voice path, measure the added transcription+synthesis latency and
+confirm it stays within an acceptable bound.
 
 **Acceptance Scenarios**:
 
@@ -98,6 +105,9 @@ recovery still works.
 5. **Given** an active conversation, **When** the patient continues it, **Then** ephemeral
    session state is served from fast storage while only selected long-lived data is written
    durably — the patient does not wait on full-state writes between phases.
+6. **Given** a voice message, **When** it is transcribed, processed, and answered, **Then** the
+   latency added by the audio steps stays within an acceptable bound and does not dominate the
+   interaction.
 
 ---
 
@@ -226,39 +236,44 @@ full path within minutes.
   NOT block the patient's response between conversation phases.
 - **FR-011**: System SHOULD reuse the result of an identical, repeated lookup within the same
   conversation instead of recomputing it.
+- **FR-012**: System SHOULD select the AI models (for text and for the voice path) that minimize
+  response latency and per-request cost while preserving reliable tool-calling and acceptable
+  transcription/synthesis quality.
+- **FR-013**: The voice path MUST keep the latency added by transcription and speech synthesis
+  within an acceptable bound so it does not dominate the interaction.
 
 **Safety & Privacy (US3)**
 
-- **FR-012**: System MUST validate patient input before acting on it and MUST block recognized
+- **FR-014**: System MUST validate patient input before acting on it and MUST block recognized
   prompt-injection/jailbreak attempts before they reach the model.
-- **FR-013**: System MUST refuse off-scope (non medical-scheduling) requests with a clear pt-BR
+- **FR-015**: System MUST refuse off-scope (non medical-scheduling) requests with a clear pt-BR
   fallback message.
-- **FR-014**: System MUST prevent user-supplied sensitive personal data from being persisted in
+- **FR-016**: System MUST prevent user-supplied sensitive personal data from being persisted in
   application logs.
-- **FR-015**: System MUST ensure generated responses never disclose another patient's data or
+- **FR-017**: System MUST ensure generated responses never disclose another patient's data or
   off-scope/unsafe content.
 
 **Context Sustainability (US4)**
 
-- **FR-016**: System MUST keep the working context within the model's limit regardless of
+- **FR-018**: System MUST keep the working context within the model's limit regardless of
   conversation length.
-- **FR-017**: System MUST compact (summarize) older history rather than truncate it abruptly,
+- **FR-019**: System MUST compact (summarize) older history rather than truncate it abruptly,
   preserving critical facts (bookings made, cancellations, stated preferences).
 
 **Observability (US5)**
 
-- **FR-018**: System MUST assign a unique correlation id to each request and propagate it across
+- **FR-020**: System MUST assign a unique correlation id to each request and propagate it across
   the gateway, API, and agent.
-- **FR-019**: System MUST emit structured logs that let an operator reconstruct a single
+- **FR-021**: System MUST emit structured logs that let an operator reconstruct a single
   request's end-to-end path.
-- **FR-020**: Agent interactions (including tool calls) MUST be traceable and linkable to the
+- **FR-022**: Agent interactions (including tool calls) MUST be traceable and linkable to the
   request's correlation id.
 
 **Cross-cutting (constitution)**
 
-- **FR-021**: All existing automated tests (API + agent) MUST remain green, and new behavior
+- **FR-023**: All existing automated tests (API + agent) MUST remain green, and new behavior
   MUST ship with tests that fail before and pass after implementation.
-- **FR-022**: User-facing errors MUST be clear pt-BR messages and MUST NEVER expose raw stack
+- **FR-024**: User-facing errors MUST be clear pt-BR messages and MUST NEVER expose raw stack
   traces, secrets, or internal detail.
 
 ### Key Entities *(include if feature involves data)*
@@ -290,18 +305,22 @@ full path within minutes.
   least 50% versus the measured production baseline.
 - **SC-005**: No multi-second stalls are perceptible between phases of the streamed response in
   the standard scheduling flow.
-- **SC-005b**: The number of durable-storage write operations on the critical path of a standard
+- **SC-006**: The number of durable-storage write operations on the critical path of a standard
   multi-step turn is reduced by at least 80% versus the current per-step baseline, with
   conversation recovery still functioning.
-- **SC-006**: 100% of prompt-injection and off-scope inputs in the test corpus are blocked or
+- **SC-007**: For a voice interaction, the latency added by transcription and speech synthesis
+  is reduced by at least 50% versus the current baseline.
+- **SC-008**: The average AI-model cost per conversation does not grow as conversation length
+  increases, and does not exceed the current per-conversation baseline.
+- **SC-009**: 100% of prompt-injection and off-scope inputs in the test corpus are blocked or
   safely refused before reaching the model.
-- **SC-007**: 0 occurrences of user-supplied sensitive personal data appear in application logs
+- **SC-010**: 0 occurrences of user-supplied sensitive personal data appear in application logs
   across the test corpus.
-- **SC-008**: Conversations of 20+ turns complete with 0 context-limit failures and retain 100%
+- **SC-011**: Conversations of 20+ turns complete with 0 context-limit failures and retain 100%
   of critical facts (bookings, cancellations, preferences) in the test scenarios.
-- **SC-009**: Any reported patient issue can be traced to its complete request path via a single
+- **SC-012**: Any reported patient issue can be traced to its complete request path via a single
   correlation id in under 5 minutes.
-- **SC-010**: The full automated test suite (API + agent) passes on every change.
+- **SC-013**: The full automated test suite (API + agent) passes on every change.
 
 ---
 
@@ -331,9 +350,20 @@ full path within minutes.
   state persistence is conditional and out of immediate scope — only revisited if checkpoint
   frequency cannot be tuned within the managed server AND it remains the dominant latency cost
   after the other performance work.
+- **Model evaluation is exploratory** (FR-012/FR-013, SC-007/SC-008): faster/cheaper text and
+  audio models are evaluated via benchmark before any swap. Reliable tool-calling is a hard
+  gate — a cheaper model that mis-calls tools is rejected. The voice path is the clearest win
+  (a faster transcription provider can cut several seconds with no architecture change); a fully
+  real-time voice model is a larger, later change. Details in
+  [technical-design.md](./technical-design.md) (QW-6).
 - **Framework modernization is an enabler, not a user story**: adopting the newer agent
-  middleware can simplify the safety and context work, but adoption must track upstream library
-  stability before it is relied upon.
+  middleware can simplify the safety and context work (it provides prebuilt PII, summarization,
+  and retry behaviors), but adoption must track upstream library stability before it is relied
+  upon. It carries no user-facing requirement of its own.
+- **Cold-start keep-alive is optional**: on the free hosting tier, an external uptime pinger can
+  keep services awake to avoid cold-start delay. It is an operational workaround (no code) that
+  becomes unnecessary on a paid tier; reliability against cold starts is already required via
+  retry (FR-001).
 - **Established retry pattern**: the retry approach already used by the TTS and email senders is
   the pattern extended to the remaining external calls (see ADR-024).
 - **Audio and text share the hardening**: improvements apply to both the text and the

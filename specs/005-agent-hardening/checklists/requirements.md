@@ -41,5 +41,9 @@
   scope of Spec 005 bounded and each user story independently testable without identity.
 - State-persistence strategy (don't checkpoint after every node; layer ephemeral session state
   vs. selective durable state) is captured at the requirements altitude in US2 / FR-009 / FR-010
-  / SC-005b, with the full technical synthesis (exit mode, Redis cache, P10 migration sequence)
+  / SC-006, with the full technical synthesis (exit mode, Redis cache, P10 migration sequence)
   in [technical-design.md](../technical-design.md) and [ADR-025](../../docs/adr/ADR-025-langgraph-checkpoint-strategy.md).
+- Audit vs technical-design.md (QW-1..7, P1/P4/P5/P6/P8/P10) confirmed full coverage. Two gaps
+  found and closed: model evaluation (QW-6) → FR-012/FR-013 + SC-007 (audio latency); cost as a
+  success dimension → SC-008. P8 (middleware) and QW-2 (keep-alive) are intentionally Assumptions,
+  not user stories — they carry no user-facing requirement of their own.
