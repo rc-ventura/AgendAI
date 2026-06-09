@@ -347,6 +347,58 @@ seria escrito para esses gaps.
 
 ---
 
+### Estratégia de persistência em camadas (síntese — FR-009/FR-010)
+
+Os itens de checkpoint (QW-3, QW-5, QW-7, P10) e os Padrões A/C/D do [ADR-025](../../docs/adr/ADR-025-langgraph-checkpoint-strategy.md)
+convergem numa única estratégia de persistência em duas camadas. O problema-raiz: hoje o runtime
+grava **o estado completo do grafo no Postgres após cada nó** — ~62 writes e ~8s de overhead por
+turno de 6 nós, sendo que ~75% desses writes não têm valor de recovery (estudo Crab, via learning
+lesson).
+
+```
+                      HOJE (tudo no Postgres, a cada nó)
+   nó1 ─write─► PG   nó2 ─write─► PG   nó3 ─write─► PG  ...  (~62 writes, ~8s)
+
+                      ALVO (persistência em camadas)
+   ┌─ Camada efêmera (curto prazo) ──────────────────────────────────┐
+   │  Redis (já implantado p/ SSE) guarda o estado de sessão em voo   │
+   │  → leitura/escrita <1ms, não bloqueia a resposta                 │
+   └──────────────────────────────────────────────────────────────────┘
+   ┌─ Camada durável (longo prazo, seletivo) ────────────────────────┐
+   │  Postgres grava só nos pontos de recovery (fim de turno),        │
+   │  apenas o que precisa sobreviver — não o estado completo a       │
+   │  cada nó.  (checkpoint "exit"/seletivo)                          │
+   └──────────────────────────────────────────────────────────────────┘
+```
+
+**Duas decisões, uma estratégia:**
+
+1. **Frequência (QW-3 — `checkpoint_mode='exit'`/seletivo)**: gravar durável só em fronteiras de
+   recovery (fim de turno), não após cada nó. Reduz ~62 → ~2 writes por turno. Seguro porque o
+   único side effect irreversível (`email_sender`) já tem retry; tools são idempotentes.
+
+2. **Camadas (QW-7 + Padrões A/C do ADR-025)**: estado de sessão efêmero no **Redis** (já
+   presente para streaming SSE) — rápido e volátil; persistência durável seletiva no **Postgres**
+   — só o que importa a longo prazo. O Redis Padrão D (cache de output de nós) é o primeiro passo
+   de baixo risco que reusa a infra existente.
+
+**Sequência de implementação (menor risco → maior):**
+
+| Passo | Ação | Reversível? | Depende do managed server expor |
+|-------|------|-------------|----------------------------------|
+| 1 | QW-3 `checkpoint_mode='exit'`/seletivo | ✅ config | modo de durabilidade na compilação |
+| 2 | QW-7 Redis cache de output de nós | ✅ config | `cache=RedisCache(...)` na compilação |
+| 3 | QW-5 Neon paid (se ainda houver gargalo) | ✅ infra | — |
+| 4 | P10 migração p/ runtime próprio (Padrão A/C completo) | ❌ arquitetural | — (sai do managed) |
+
+> **Fronteira com a Spec 007**: aqui a "persistência de longo prazo seletiva" refere-se ao
+> **estado de execução do grafo** (checkpoint para recovery da conversa). A **memória de fatos do
+> paciente** ("prefere sextas", "convênio Amil") é um conceito distinto e vive na
+> [Spec 007](../007-memory-hitl/spec.md) — embora ambas compartilhem o mesmo princípio
+> arquitetural: Redis para o efêmero/rápido, Postgres para o durável/seletivo.
+
+---
+
 ### QW-6 — Avaliação de Modelos Alternativos
 
 O sistema hoje usa três modelos OpenAI: `gpt-4o-mini` (LLM), `whisper-1` (STT) e `tts-1` (TTS). A pesquisa de produção levanta alternativas que podem reduzir latência e custo.

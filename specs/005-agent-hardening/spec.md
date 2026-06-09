@@ -69,7 +69,10 @@ long timeout.
 
 A patient interacting with the chat experiences responses that begin quickly and stream
 smoothly, without the multi-second stalls ("engasgo") observed in production between
-conversation phases.
+conversation phases. A significant share of that stall comes from the system writing the full
+conversation state to durable storage after **every** internal processing step — most of which
+contributes nothing to recovery. Responses feel fluid when that persistence cost is taken off
+the patient's critical path.
 
 **Why this priority**: Latency is the most-felt day-to-day complaint. The system "works"
 without this slice, so it ranks below reliability — but perceived speed strongly shapes whether
@@ -77,7 +80,9 @@ patients complete a booking.
 
 **Independent Test**: Measure end-to-end latency for a standard text scheduling request against
 the current production baseline, and confirm a meaningful reduction with no perceptible
-multi-second stalls between phases of the streamed answer.
+multi-second stalls between phases of the streamed answer. Separately, count the durable-storage
+write operations on the critical path and confirm they drop substantially while conversation
+recovery still works.
 
 **Acceptance Scenarios**:
 
@@ -87,6 +92,12 @@ multi-second stalls between phases of the streamed answer.
    median end-to-end latency is meaningfully lower than the measured baseline.
 3. **Given** the same lookup is needed twice within one conversation, **When** it recurs,
    **Then** the system reuses the earlier result instead of recomputing it.
+4. **Given** a multi-step conversation turn, **When** the agent processes it, **Then** the
+   system persists durable state only at the points needed for recovery (e.g., turn boundaries)
+   rather than after every internal step.
+5. **Given** an active conversation, **When** the patient continues it, **Then** ephemeral
+   session state is served from fast storage while only selected long-lived data is written
+   durably — the patient does not wait on full-state writes between phases.
 
 ---
 
@@ -207,49 +218,55 @@ full path within minutes.
   concurrently rather than sequentially.
 - **FR-008**: System MUST minimize the number of model round-trips needed to fulfill a standard
   scheduling request.
-- **FR-009**: System MUST keep state-persistence work off the patient's critical response path
-  where that work does not improve conversation-recovery guarantees.
-- **FR-010**: System SHOULD reuse the result of an identical, repeated lookup within the same
+- **FR-009**: System MUST NOT persist the full conversation/execution state after every internal
+  processing step. Durable state MUST be written only at the points required for recovery (e.g.,
+  at turn or conversation boundaries), not after each node.
+- **FR-010**: System MUST keep ephemeral active-session state in low-latency storage and MUST
+  persist durably only the selected long-lived data needed for recovery — full-state writes MUST
+  NOT block the patient's response between conversation phases.
+- **FR-011**: System SHOULD reuse the result of an identical, repeated lookup within the same
   conversation instead of recomputing it.
 
 **Safety & Privacy (US3)**
 
-- **FR-011**: System MUST validate patient input before acting on it and MUST block recognized
+- **FR-012**: System MUST validate patient input before acting on it and MUST block recognized
   prompt-injection/jailbreak attempts before they reach the model.
-- **FR-012**: System MUST refuse off-scope (non medical-scheduling) requests with a clear pt-BR
+- **FR-013**: System MUST refuse off-scope (non medical-scheduling) requests with a clear pt-BR
   fallback message.
-- **FR-013**: System MUST prevent user-supplied sensitive personal data from being persisted in
+- **FR-014**: System MUST prevent user-supplied sensitive personal data from being persisted in
   application logs.
-- **FR-014**: System MUST ensure generated responses never disclose another patient's data or
+- **FR-015**: System MUST ensure generated responses never disclose another patient's data or
   off-scope/unsafe content.
 
 **Context Sustainability (US4)**
 
-- **FR-015**: System MUST keep the working context within the model's limit regardless of
+- **FR-016**: System MUST keep the working context within the model's limit regardless of
   conversation length.
-- **FR-016**: System MUST compact (summarize) older history rather than truncate it abruptly,
+- **FR-017**: System MUST compact (summarize) older history rather than truncate it abruptly,
   preserving critical facts (bookings made, cancellations, stated preferences).
 
 **Observability (US5)**
 
-- **FR-017**: System MUST assign a unique correlation id to each request and propagate it across
+- **FR-018**: System MUST assign a unique correlation id to each request and propagate it across
   the gateway, API, and agent.
-- **FR-018**: System MUST emit structured logs that let an operator reconstruct a single
+- **FR-019**: System MUST emit structured logs that let an operator reconstruct a single
   request's end-to-end path.
-- **FR-019**: Agent interactions (including tool calls) MUST be traceable and linkable to the
+- **FR-020**: Agent interactions (including tool calls) MUST be traceable and linkable to the
   request's correlation id.
 
 **Cross-cutting (constitution)**
 
-- **FR-020**: All existing automated tests (API + agent) MUST remain green, and new behavior
+- **FR-021**: All existing automated tests (API + agent) MUST remain green, and new behavior
   MUST ship with tests that fail before and pass after implementation.
-- **FR-021**: User-facing errors MUST be clear pt-BR messages and MUST NEVER expose raw stack
+- **FR-022**: User-facing errors MUST be clear pt-BR messages and MUST NEVER expose raw stack
   traces, secrets, or internal detail.
 
 ### Key Entities *(include if feature involves data)*
 
-- **Conversation Session**: the ongoing exchange with one patient — its turns/messages, the
-  working context sent to the model, and the persisted state used for recovery.
+- **Conversation Session**: the ongoing exchange with one patient — its turns/messages and the
+  working context sent to the model. Its state has two tiers: **ephemeral session state** (the
+  in-flight working data, kept in low-latency storage) and **durable recovery state** (the
+  selected long-lived data persisted only at recovery points, not after every step).
 - **Request Trace**: a single inbound request's journey, identified by a correlation id that
   links gateway, API, agent, and observability records.
 - **Guardrail Decision**: the outcome of validating an input or output — allow, block, refuse,
@@ -273,6 +290,9 @@ full path within minutes.
   least 50% versus the measured production baseline.
 - **SC-005**: No multi-second stalls are perceptible between phases of the streamed response in
   the standard scheduling flow.
+- **SC-005b**: The number of durable-storage write operations on the critical path of a standard
+  multi-step turn is reduced by at least 80% versus the current per-step baseline, with
+  conversation recovery still functioning.
 - **SC-006**: 100% of prompt-injection and off-scope inputs in the test corpus are blocked or
   safely refused before reaching the model.
 - **SC-007**: 0 occurrences of user-supplied sensitive personal data appear in application logs
@@ -296,10 +316,21 @@ full path within minutes.
   [Spec 007](../007-memory-hitl/spec.md).
 - **Guardrails are in-system for this phase**: lightweight checks (pattern/list based) run
   inside the agent; managed cloud guardrails are a later-phase upgrade.
-- **Managed runtime retained**: the managed LangGraph Server remains the runtime. Migrating off
-  it for full control of state persistence is conditional and out of immediate scope — it is
-  only revisited if checkpoint frequency cannot be tuned within the managed server AND it
-  remains the dominant latency cost after the other performance work.
+- **State-persistence strategy** (FR-009/FR-010): the agent runtime today writes the full graph
+  state to durable Postgres after every node — for a ~6-node turn that is ~62 writes / ~8s of
+  overhead, and ADR-025 / the Redis-Postgres learning lesson show ~75% of those writes carry no
+  recovery value. The strategy is: (a) write durably only at recovery points instead of after
+  each node (checkpoint "exit"/selective mode), and (b) layer persistence — keep ephemeral
+  session state in fast storage (Redis, already deployed for streaming) and persist only
+  selected long-lived data durably (Postgres). See
+  [ADR-025](../../docs/adr/ADR-025-langgraph-checkpoint-strategy.md) and
+  [the learning lesson](../../docs/learning-lessons/arquitetura_redis_postgress.md).
+- **Managed runtime retained**: the managed LangGraph Server remains the runtime. The first move
+  is to tune checkpoint frequency within it (exit/selective mode); reusing the existing Redis as
+  a node-output cache is investigated next. Migrating off the managed server for full control of
+  state persistence is conditional and out of immediate scope — only revisited if checkpoint
+  frequency cannot be tuned within the managed server AND it remains the dominant latency cost
+  after the other performance work.
 - **Framework modernization is an enabler, not a user story**: adopting the newer agent
   middleware can simplify the safety and context work, but adoption must track upstream library
   stability before it is relied upon.

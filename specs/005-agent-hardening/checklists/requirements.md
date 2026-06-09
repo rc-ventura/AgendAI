@@ -39,3 +39,7 @@
   blocking ambiguity.
 - Authentication-dependent work was split out to Spec 006/007 before this rebuild, keeping the
   scope of Spec 005 bounded and each user story independently testable without identity.
+- State-persistence strategy (don't checkpoint after every node; layer ephemeral session state
+  vs. selective durable state) is captured at the requirements altitude in US2 / FR-009 / FR-010
+  / SC-005b, with the full technical synthesis (exit mode, Redis cache, P10 migration sequence)
+  in [technical-design.md](../technical-design.md) and [ADR-025](../../docs/adr/ADR-025-langgraph-checkpoint-strategy.md).
