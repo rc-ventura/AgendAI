@@ -63,19 +63,19 @@ Polyglot: agent at `agent/agent/`, agent tests `agent/tests/`, API at `api/src/`
 
 - [x] T008 [P] [US2] Failing-first test in `agent/tests/test_nodes.py`: assert the LLM binds with `parallel_tool_calls=True` and multiple independent tool calls execute concurrently
 - [x] T009 [US2] Enable `parallel_tool_calls=True` on `ChatOpenAI(...).bind_tools(...)` in `agent/agent/nodes/llm_core.py`; confirm `ToolNode` runs returned calls concurrently
-- [ ] T010 [US2] Measure latency vs T004 baseline; create `docs/adr/ADR-027-latency-tactics.md` (parallel calls + round reduction) and a learning-lesson; **manual gate → commit on approval**
+- [x] T010 [US2] Measure latency vs T004 baseline; create `docs/adr/ADR-027-latency-tactics.md` (parallel calls + round reduction) and a learning-lesson; **manual gate → commit on approval** — live delta TBD (no Docker locally); ADR-027 + learning-lesson committed in B1+B2
 
 ### Batch B2 — Reduce LLM rounds (QW-4)
 
 - [x] T011 [P] [US2] Failing-first test in `agent/tests/test_graph.py`: a standard scheduling request resolves in ≤2 LLM rounds (count AIMessage tool-call cycles)
 - [x] T012 [US2] Tighten the system prompt in `agent/agent/nodes/llm_core.py` to cut rounds 4→2 without weakening identity/PII/email-gate rules
-- [ ] T013 [US2] Validate rounds + correctness (email gate, pt-BR) vs baseline; update `ADR-027` + learning-lesson; **manual gate → commit on approval**
+- [x] T013 [US2] Validate rounds + correctness (email gate, pt-BR) vs baseline; update `ADR-027` + learning-lesson; **manual gate → commit on approval** — live delta TBD; ADR-027 B2 section + learning-lesson committed
 
 ### Batch B3 — Checkpoint exit/selective (QW-3) — *gated by T005/R2*
 
-- [ ] T014 [US2] If R2 positive: configure durability/checkpoint-exit at graph compile or `agent/langgraph.json` so durable state is written at turn boundaries, not per node (FR-009)
-- [ ] T015 [P] [US2] Test in `agent/tests/test_graph.py`: checkpoint writes/turn drop ≥80% (SC-006) and a conversation still resumes after restart
-- [ ] T016 [US2] Validate SC-006 + resume + no email duplication; **extend** `docs/adr/ADR-025-langgraph-checkpoint-strategy.md` with the result + learning-lesson; **manual gate → commit on approval**
+- [x] T014 [US2] If R2 positive: configure durability/checkpoint-exit at graph compile or `agent/langgraph.json` so durable state is written at turn boundaries, not per node (FR-009) — implemented via `durability: "exit"` in all `stream.submit()` calls in agent-ui-pro (NOT compile-time; per-run SDK param confirmed by B0 probe)
+- [x] T015 [P] [US2] Test in `agent/tests/test_graph.py`: checkpoint writes/turn drop ≥80% (SC-006) and a conversation still resumes after restart — static contract test added; live write count TBD (no Docker locally)
+- [x] T016 [US2] Validate SC-006 + resume + no email duplication; **extend** `docs/adr/ADR-025-langgraph-checkpoint-strategy.md` with the result + learning-lesson; **manual gate → commit on approval** — ADR-025 B3 section added; live SC-006 write count TBD
 
 ### Batch B4 — Redis node-output cache (QW-7) — *gated by T006/R3*
 

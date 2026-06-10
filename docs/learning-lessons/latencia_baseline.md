@@ -148,3 +148,26 @@ arquitetura é tão importante quanto otimizar código. Testar com `test_system_
 
 **Validação**: `test_system_prompt_directs_parallel_lookup` (T011) + 64 pytest verdes.
 Live delta TBD (requer sistema em execução).
+
+---
+
+## B3 — `durability: "exit"` no SDK client — implementado 2026-06-10
+
+**Tática**: passar `durability: "exit"` em todos os `stream.submit()` do `agent-ui-pro/src/components/thread/index.tsx`.
+
+**Problema original**: o managed LangGraph Server usa `durability: "async"` por default — escreve
+checkpoint após cada nó do grafo. Com 6 nós, cada turno gera ~6 writes no Postgres (Neon).
+
+**Solução**: `durability: "exit"` reduce para 1 write/turno (somente quando o run termina).
+O parâmetro é **por-run, no SDK client** — não é config de compile-time no `graph.py`.
+Confirmado pelo tipo `Durability` no `@langchain/langgraph-sdk/dist/types.d.ts:10`.
+
+**Ressalva**: com `"exit"`, estado mid-run não é persistido. Se o servidor cair durante a execução,
+o turno perde-se. Para o AgendAI (operações idempotentes via REST API), isso é aceitável.
+
+**Lição de processo**: antes de implementar config de durabilidade, sempre verificar **onde** o
+parâmetro vive: compile-time no grafo, config do servidor, ou parâmetro por-run no SDK client.
+São lugares completamente diferentes e exigem código em camadas distintas.
+
+**Validação**: `test_ui_stream_submit_uses_durability_exit` (T015) + 65 pytest verdes.
+Write count/turno TBD (requer sistema em execução).

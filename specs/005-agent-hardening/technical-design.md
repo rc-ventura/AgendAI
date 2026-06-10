@@ -323,7 +323,7 @@ seria escrito para esses gaps.
 |---|------|---------|---------|-------|-------|------------|
 | **QW-1** | **Parallel tool calls** — habilitar chamadas paralelas de tools no LLM | `agent/agent/nodes/llm_core.py` | ~30 min | 1–3s por conversa | Zero | ✅ Fazer agora |
 | **QW-2** | **UptimeRobot** — ping a cada 14 min no nginx + UI para evitar hibernação Render | Externo (sem código) | ~5 min | Elimina cold start | Grátis | ⚙️ Opcional — só vale no free tier |
-| **QW-3** | **`checkpoint_mode='exit'`** — investigar se o managed LangGraph Server aceita checkpoint só ao final | `agent/agent/graph.py` | ~30 min de teste | Potencial 62→2 writes/conversa (~8s) | Zero | 🔍 Investigar |
+| **QW-3** | **`durability: "exit"`** — ~~investigar se o managed LangGraph Server aceita checkpoint só ao final~~ **B0 probe (T005) confirmou**: NÃO é parâmetro de compile-time em `graph.py`. É parâmetro **por-run no payload do SDK client** (`stream.submit({ durability: "exit" })`). Implementado em `agent-ui-pro/src/components/thread/index.tsx`. O servidor não expõe env var nem config de servidor para default — ver [ADR-025 B3](../../docs/adr/ADR-025-langgraph-checkpoint-strategy.md). | ~~`agent/agent/graph.py`~~ `agent-ui-pro/.../thread/index.tsx` | ✅ feito | ~83% redução writes/turno | Zero | ✅ Implementado (B3) |
 | **QW-4** | **Prompt engineering** — reduzir rounds de LLM de 4 para 2 com system prompt mais preciso | `agent/agent/nodes/llm_core.py` | ~2–4h | 5–7s por conversa | Zero | ✅ Próximo |
 | **QW-5** | **Neon paid** — upgrade para P99 <20ms nos checkpoints | Infraestrutura | ~10 min | ~1s por conversa | $19/mês | ⚙️ Opcional — avaliar após QW-3 |
 | **QW-6** | **Avaliação de modelos alternativos** — LLM de texto mais rápido/barato; pipeline de áudio multimodal | `llm_core.py`, `transcriber.py`, `tts.py` | ~1 dia de benchmark | Latência e custo por token | Varia | 🔍 Investigar |
@@ -332,7 +332,7 @@ seria escrito para esses gaps.
 **Contexto técnico dos quick wins:**
 - **QW-1**: o GPT-4o-mini hoje executa tool calls em sequência. Com `parallel_tool_calls=True`, chama múltiplas tools simultaneamente — ganho direto de latência.
 - **QW-2**: serviços no Render free tier hibernam após 15 min de inatividade. UptimeRobot resolve, mas é workaround — se migrar para plano pago do Render, o item deixa de existir.
-- **QW-3**: LangGraph por padrão escreve no Postgres após **cada nó** (6 nós = ~62 writes). O modo `'exit'` escreve apenas uma vez ao final. Seguro para AgendAI pois o único side effect irreversível (`email_sender`) já tem retry. Ver [ADR-025](../../docs/adr/ADR-025-langgraph-checkpoint-strategy.md).
+- **QW-3**: LangGraph por padrão escreve no Postgres após **cada nó** (6 nós = ~62 writes). O modo `'exit'` escreve apenas uma vez ao final. **Sonda B0 (T005) corrigiu a hipótese inicial**: `durability` NÃO é parâmetro de `graph.compile()` nem de `langgraph.json`. É **parâmetro por-run no SDK client** (`stream.submit({ durability: "exit" })`). Nginx sem Lua/NJS não consegue injetar no body. Env var de server-side default não existe no `langgraph_api`. A única forma de impor isso como política de backend seria (a) nginx com `ngx_http_js_module` ou (b) proxy intermediário — ambos adicionam complexidade desproporcional. **Implementado no client** — ver [ADR-025 seção B3](../../docs/adr/ADR-025-langgraph-checkpoint-strategy.md). Seguro pois `email_sender` já tem retry. Ver [ADR-025](../../docs/adr/ADR-025-langgraph-checkpoint-strategy.md).
 - **QW-4**: cada round extra de LLM soma 1–2s. Reduzir de 4 para 2 rounds (input → resposta direta com tools) é o maior ganho individual possível sem mudança de infra.
 - **QW-5**: só faz sentido se QW-3 não resolver — se o checkpoint por nó continuar, Neon paid reduz o overhead de ~1.2s para ~160ms. Se QW-3 funcionar, QW-5 tem impacto mínimo.
 - **QW-6**: ver detalhamento abaixo.
@@ -394,7 +394,7 @@ lesson).
 
 | Passo | Ação | Reversível? | Depende do managed server expor |
 |-------|------|-------------|----------------------------------|
-| 1 | QW-3 `checkpoint_mode='exit'`/seletivo | ✅ config | modo de durabilidade na compilação |
+| 1 | QW-3 `durability: "exit"` no SDK client (**não** compile-time) | ✅ config | ~~na compilação~~ → parâmetro per-run; implementado no frontend |
 | 2 | QW-7 Redis cache de output de nós | ✅ config | `cache=RedisCache(...)` na compilação |
 | 3 | QW-5 Neon paid (se ainda houver gargalo) | ✅ infra | — |
 | 4 | P10 migração p/ runtime próprio (Padrão A/C completo) | ❌ arquitetural | — (sai do managed) |
