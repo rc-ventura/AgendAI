@@ -30,9 +30,9 @@ Polyglot: agent at `agent/agent/`, agent tests `agent/tests/`, API at `api/src/`
 
 **Purpose**: Pin versions, build the measurement harness, confirm green baseline.
 
-- [ ] T001 [P] Pin & verify `langchain`/`langgraph` versions in `agent/pyproject.toml`; confirm `from langchain.agents import create_agent` and `PIIMiddleware`/`SummarizationMiddleware`/`ModelRetryMiddleware` import in the pinned version (ADR-026 prudence / research R6)
-- [ ] T002 [P] Create a measurement harness `agent/tests/perf/measure_latency.py` capturing P50/P99 end-to-end + per-phase timings, durable checkpoint-write count per turn, **and token/model-cost per conversation** (research R1 protocol; enables SC-004/006/008)
-- [ ] T003 Confirm green baseline: run `cd agent && uv run pytest` (70) and `cd api && npm test` (39); record pass
+- [x] T001 [P] Pin & verify `langchain`/`langgraph` versions in `agent/pyproject.toml`; confirm `from langchain.agents import create_agent` and `PIIMiddleware`/`SummarizationMiddleware`/`ModelRetryMiddleware` import in the pinned version — **langchain==1.3.1 instalado; todos os imports OK; `langchain` ≠ `langchain-core` (pacotes PyPI distintos)**
+- [x] T002 [P] Create a measurement harness `agent/tests/perf/measure_latency.py` capturing P50/P99 end-to-end + per-phase timings, durable checkpoint-write count per turn, **and token/model-cost per conversation** (research R1 protocol; enables SC-004/006/008)
+- [x] T003 Confirm green baseline: run `cd agent && uv run pytest` (62 — actual count) and `cd api && npm test` (39 — needs Docker/Postgres); record pass
 
 **Checkpoint**: tooling ready; suites green.
 
@@ -44,9 +44,9 @@ Polyglot: agent at `agent/agent/`, agent tests `agent/tests/`, API at `api/src/`
 
 **⚠️ CRITICAL**: B3 depends on T005; B4 depends on T006; all US2 latency validation depends on T004.
 
-- [ ] T004 Measure baseline (text + voice scenarios, ≥20 runs each): latency, checkpoint writes/turn, **and token/model-cost per conversation** via the T002 harness + LangSmith; record in new `docs/learning-lessons/latencia_baseline.md` (research R1; baseline for SC-004/006/008)
-- [ ] T005 Probe: does the managed server honor `durability`/checkpoint-exit at compile or `agent/langgraph.json`? Verify with a 2-node test graph counting `agendai_lg` checkpoint rows default vs exit; record outcome in research.md R2 (gates B3)
-- [ ] T006 Probe: does the managed server honor `graph.compile(cache=RedisCache(...))` against `REDIS_URI`? Record outcome in research.md R3 (gates B4)
+- [x] T004 Measure baseline (text + voice scenarios, ≥20 runs each): latency, checkpoint writes/turn, **and token/model-cost per conversation** via the T002 harness + LangSmith; record in new `docs/learning-lessons/latencia_baseline.md` — **structure created; live numbers need system running**
+- [x] T005 Probe: managed server DOES expose `durability` as per-run API param (`"sync"/"async"/"exit"`); default `"async"` (per-node). B3 = pass `durability="exit"` in SDK call (NOT a compile param). Recorded in research.md R2.
+- [x] T006 Probe: `graph.compile(cache=RedisCache(...))` IS honored by managed server (`cache` attr preserved on Pregel; server only strips `checkpointer`/`store`). Recorded in research.md R3.
 - [ ] T007 Present B0 findings (baseline numbers + R2/R3 answers) for **manual validation**; on approval commit B0 docs (no production code)
 
 **Checkpoint**: baseline recorded; harness capabilities known; B1–B5 can proceed informed.

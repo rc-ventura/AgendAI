@@ -51,20 +51,49 @@ do LangChain e cobre injection/jailbreak/topical rails prontos.
   se a stack de middleware (`create_agent`) estiver estável, este é o caminho; senão, fallback
   para nós manuais — mas mesmo o fallback deve reusar a lógica de PII conhecida.
 
-## Cuidado registrado (lição de processo)
+## Padrão correto: `create_agent` (verificado em langchain 1.3.1)
 
-Uma versão anterior desta análise (e do ADR-026) afirmava que `create_agent` "foi removido em
-`langchain v1.1.0` sem aviso". **Isso era falso** — a verificação na fonte primária mostrou que
-`create_agent` é o método oficial e estável do LangChain v1 (v1.1 o expande), e o relato de
-"removido" foi um erro de ambiente (pacotes stale) num post de fórum, depois desmentido.
+```python
+from langchain.agents import create_agent
+from langchain.agents.middleware import (
+    PIIMiddleware, SummarizationMiddleware,
+    ModelRetryMiddleware, LLMToolSelectorMiddleware,
+    HumanInTheLoopMiddleware,
+)
 
-**Lição**: toda alegação de remoção/deprecação de API deve ser confirmada em **release notes
-oficiais**, não num relato isolado de fórum. A afirmação errada quase virou base de uma decisão
-arquitetural (um "gate de estabilidade" + fallback para nós manuais) — ver
-[[arquitetura_redis_postgress]] para o princípio de verificar antes de decidir.
+agent = create_agent(
+    model="openai:gpt-4o-mini",   # string ou BaseChatModel; sem bind_tools
+    tools=[...],
+    system_prompt="...",
+    middleware=[
+        PIIMiddleware("email", strategy="redact", apply_to_input=True, apply_to_output=True),
+        PIIMiddleware("credit_card", strategy="block"),
+        ModelRetryMiddleware(max_retries=3, backoff_factor=2.0),
+        SummarizationMiddleware(
+            model="openai:gpt-4o-mini",
+            trigger=("tokens", 8000),
+            keep=("messages", 10),
+        ),
+    ],
+    cache=RedisCache(redis_client),  # B4 nativo
+)  # → retorna CompiledStateGraph (Pregel), pode ser adicionado como nó no grafo pai
+```
 
-Prudência que **permanece válida** (genérica, não um gate dramático): pinar a versão e verificar o
-import na versão pinada antes de depender.
+> **Nota importante**: o pacote PyPI é `langchain` (não `langchain-core`). São pacotes distintos.
+> `langchain-core` é uma dependência transitiva; a API de agentes e middleware está no `langchain` base.
+
+## Lições de processo (3 ciclos de erro → aprendizado)
+
+| Ciclo | Erro | Fonte | Correção |
+|-------|------|-------|----------|
+| 1 | "`create_agent` foi removido em v1.1.0" | Post de fórum não verificado | Release notes oficiais: nunca removido |
+| 2 | "PIIMiddleware não existe no ambiente" | Import falhou sem instalar `langchain` base | `langchain` ≠ `langchain-core`; instalar e testar |
+| 3 | — | — | **Correto**: `langchain>=1.0` instalado, todos os imports OK |
+
+**Regra consolidada**: toda afirmação sobre disponibilidade de API deve ser verificada com:
+1. `pip show <package>` — o pacote está instalado?
+2. `from package import Thing` — no ambiente real, com a versão correta.
+Documentação sem instalação não conta.
 
 ## Referências
 

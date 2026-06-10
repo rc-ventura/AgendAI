@@ -48,6 +48,20 @@ the core "mexer no harness" question. Everything in B3 depends on the answer.
 **Alternatives considered**: Reduce node count to cut writes (partial — limited by the audio
 pipeline); move to `async` durability (smaller win, some crash-loss risk) — kept as fallback.
 
+> **B0 OUTCOME (2026-06-09) — POSITIVE ✅**
+>
+> `graph.compile()` does **NOT** accept a `durability` parameter (not a compile-time config).
+> However, the managed LangGraph Server API exposes `durability` as a **per-run request parameter**:
+>
+> - Values: `"sync"` (per-node, ~N writes), `"async"` (default — async per-node), `"exit"` (write only at run end)
+> - Source: `langgraph_api/models/run.py` — `RunCreateDict.durability: str | None`
+> - Default: `"async"` when `checkpoint_during` is `None` or `True` (i.e. every node)
+> - To get exit-mode: client calls `client.runs.stream(..., durability="exit")`
+>
+> **Implementation path for B3**: Pass `durability="exit"` in the agent-ui-pro SDK call when creating
+> runs. This does NOT require changing `graph.py`. Expected: ~80% reduction in checkpoint writes per
+> turn (6-node graph → 1 write instead of 6+).
+
 **Outcome → extend [ADR-025](../../docs/adr/ADR-025-langgraph-checkpoint-strategy.md).**
 
 ---
@@ -72,6 +86,21 @@ the compile-time cache. Low priority within US2 (smallest win).
 serving stale availability after an in-session write, violating "never serve stale". This bounds
 the win to stable lookups, which is acceptable given B4 is the smallest latency item.
 
+> **B0 OUTCOME (2026-06-09) — POSITIVE ✅**
+>
+> Static probe confirmed:
+> - `from langgraph.cache.redis import RedisCache` — available in langgraph 1.2.0
+> - `from langgraph.cache.memory import InMemoryCache` — available
+> - `graph.compile(cache=cache)` stores the cache on the compiled `Pregel` object (`g.cache is cache`)
+> - The managed server loads the pre-compiled `graph` object and **does NOT strip `cache`** (it only
+>   warns about `checkpointer` and `store` — `cache` passes through unchanged)
+> - `RedisCache(redis=<async_redis_client>, prefix="langgraph:cache:")` — constructor signature confirmed
+>
+> **Implementation path for B4**: Add `cache=RedisCache(redis_client)` to `builder.compile()` in
+> `agent/agent/graph.py`. Wire `REDIS_URI` via an async Redis client at startup. Scope cache to
+> write-stable tool nodes only (Constitution IV — `buscar_pagamentos`, static doctor/patient data);
+> exclude `buscar_horarios` / appointment reads.
+
 **Outcome → extend [ADR-025](../../docs/adr/ADR-025-langgraph-checkpoint-strategy.md) (record the
 cache-scoping constraint).**
 
@@ -79,7 +108,14 @@ cache-scoping constraint).**
 
 ## R4 — Parallel tool calls (QW-1, B1)
 
-**Decision**: Enable `parallel_tool_calls=True` on the `ChatOpenAI(...).bind_tools(...)` in
+**Decision (updated for `create_agent` pattern)**: With `create_agent`, tool binding is internal
+— tools are passed directly as `tools=[...]`. The parallel tool calls behavior is controlled by
+the model's capabilities + whether the model is invoked with `parallel_tool_calls=True` in its
+tool binding config. Since `create_agent` handles this internally, B1 implementation becomes:
+verify that `create_agent` enables parallel tool calls by default (gpt-4o-mini supports it), and
+if not, pass a `ChatOpenAI` instance configured with `parallel_tool_calls=True` as the `model` arg.
+
+**Original decision**: Enable `parallel_tool_calls=True` on `ChatOpenAI(...).bind_tools(...)` in
 `llm_core.py`, and ensure `tool_node` executes returned calls concurrently.
 
 **Rationale**: `gpt-4o-mini` supports parallel function calling; LangGraph's `ToolNode` already
@@ -96,7 +132,11 @@ calls — covered by the manual validation gate and tests.
 
 ## R5 — Reducing LLM rounds (QW-4, B2)
 
-**Decision**: Tighten the system prompt so a standard scheduling request resolves in ~2 rounds
+**Decision (updated for `create_agent` pattern)**: With `create_agent`, the system prompt is
+passed as `system_prompt=SYSTEM_PROMPT` directly. The `llm_core.py` node is replaced by the
+`create_agent` subgraph, so prompt changes happen in the `system_prompt` argument to `create_agent`.
+
+**Original decision**: Tighten the system prompt so a standard scheduling request resolves in ~2 rounds
 instead of ~4, by making the tool-use contract explicit (when to call which tool, what to gather
 first) — building on the already-strong prompt in `llm_core.py`.
 
@@ -126,7 +166,28 @@ It is the **official, stable** way to build agents in LangChain v1.
 `ModelRetryMiddleware` import in the pinned version; confirm the managed LangGraph Server accepts
 the `create_agent` graph as a subgraph (integration check); keep tests green.
 
-**Outcome → ADR-026 (revised) — adopt; ADR-029/030 for the guardrails/context middleware config.**
+> **T001 OUTCOME (2026-06-09) — CORREÇÃO FINAL ✅**
+>
+> Probe revelou que o pacote `langchain` base **não estava instalado** — apenas `langchain-core`.
+> São dois pacotes PyPI distintos (`langchain` ≠ `langchain-core`). Após instalar `langchain==1.3.1`:
+>
+> - `from langchain.agents import create_agent` → **OK** ✅
+> - `from langchain.agents.middleware import PIIMiddleware` → **OK** ✅
+> - `from langchain.agents.middleware import SummarizationMiddleware` → **OK** ✅
+> - `from langchain.agents.middleware import ModelRetryMiddleware` → **OK** ✅
+> - `from langchain.agents.middleware import LLMToolSelectorMiddleware` → **OK** ✅
+> - `from langchain.agents.middleware import HumanInTheLoopMiddleware` → **OK** ✅
+>
+> **`create_agent` aceita** (verificado): `model` (string `"openai:gpt-4o-mini"` OU `BaseChatModel`),
+> `tools`, `system_prompt`, `middleware=[]`, `cache=BaseCache`. Sem `bind_tools` manual —
+> tool binding é interno.
+>
+> **Pacote adicionado ao projeto**: `langchain>=1.0` em `agent/pyproject.toml`.
+> **Lição de processo**: `langchain-core` e `langchain` são PyPI packages distintos. Sempre instalar
+> e testar os imports no ambiente correto antes de documentar disponibilidade.
+
+**Outcome → ADR-026 (3ª revisão — correta): `create_agent` + middleware é o caminho padrão. ADR-029/030
+para a configuração específica dos guardrails/context middleware.**
 
 ---
 

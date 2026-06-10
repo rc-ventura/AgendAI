@@ -1,132 +1,119 @@
 # ADR-026 — Modernização do core agêntico: `create_agent` + Middleware
 
-**Status:** Proposed — adotar middleware como caminho padrão (revisado 2026-06-09; ver Correção)
-
-**Data:** 2026-06-09 (revisado no mesmo dia após verificação de fonte primária)
+**Status:** Proposed — adotar `create_agent` + middleware como caminho padrão  
+**Data:** 2026-06-09 (3ª revisão — versão final correta)
 
 **Spec relacionada:** [Spec 005 — Agent Hardening (P8)](../../specs/005-agent-hardening/spec.md)
 
-**Depende de:** [ADR-024](./ADR-024-retry-resilience-strategy.md) (retry), [ADR-013](./ADR-013-langgraph-dev-server.md), [ADR-014](./ADR-014-checkpointer-inmem.md)
+**Depende de:** [ADR-024](./ADR-024-retry-resilience-strategy.md) (retry), [ADR-013](./ADR-013-langgraph-dev-server.md)
 
 ---
 
-## ⚠️ Correção factual (2026-06-09)
+## Histórico de correções
 
-A primeira versão deste ADR afirmava que **"`create_agent` foi removido em `langchain v1.1.0`
-sem aviso prévio"** e construía toda a decisão sobre um "gate de estabilidade" por causa disso.
+| Versão | Erro | Correção |
+|--------|------|----------|
+| v1 | "`create_agent` foi removido em v1.1.0" | FALSO — era erro de venv de fórum, não remoção real |
+| v2 | "PIIMiddleware etc. não existem" | FALSO — pacote `langchain` (base) não estava instalado; `langchain-core` ≠ `langchain` |
+| **v3** | — | **Correto**: instalar `langchain>=1.0`, middleware existe em `langchain.agents.middleware` |
 
-**Essa premissa era FALSA.** Ela foi herdada do `technical-design.md` (rascunho anterior) e
-propagada sem verificação. A checagem na fonte primária mostra:
-
-- A [doc oficial de release do LangChain v1](https://docs.langchain.com/oss/python/releases/langchain-v1)
-  apresenta `create_agent` como **o método padrão e recomendado** de construir agentes; a
-  [v1.1](https://changelog.langchain.com/announcements/langchain-1-1) **expande** `create_agent`
-  (aceita `SystemMessage` via `system_prompt`, model-profile system, middleware expandido).
-- O único relato de "removido em v1.1.0" foi
-  [um post de fórum](https://forum.langchain.com/t/create-agent-no-longer-exists-in-langchain-agents-v1-1-0/2350)
-  que se revelou **erro de ambiente do usuário** (pacotes stale no virtualenv). A comunidade
-  confirmou *"It has not been removed"* e o autor reconheceu que era o venv dele.
-
-Conclusão: **não há instabilidade de remoção**. O "gate de estabilidade" perde a razão de ser e
-é substituído pela prudência normal de engenharia (pinar versão, verificar import, testes verdes).
+**Lição de processo consolidada**: verificar sempre nas *release notes oficiais* e no ambiente
+*com o pacote correto instalado*. `langchain-core` e `langchain` são PyPI packages distintos.
 
 ---
 
 ## Contexto
 
-O grafo atual (`agent/agent/graph.py`) implementa manualmente lógica que o sistema de
-**middleware** do LangChain v1 provê como prebuilt:
+O grafo atual (`agent/agent/graph.py`) implementa manualmente o loop LLM + ferramentas via
+`chat_with_llm` + `ToolNode` + `process_tool_results`. O `langchain` v1 (PyPI: `langchain>=1.0`)
+introduziu `create_agent` — o padrão oficial para agentes — que oferece:
 
-- retry de LLM (P1 / ADR-024 — `tenacity` em `llm_core.py`)
-- guardrails de PII input/output (P4)
-- summarização de contexto (P6)
+- loop LLM + ferramentas embutido (sem `bind_tools` manual)
+- sistema de middleware composável: `PIIMiddleware`, `SummarizationMiddleware`,
+  `ModelRetryMiddleware`, `HumanInTheLoopMiddleware`, `LLMToolSelectorMiddleware`
+- suporte a `cache=` direto (integra B4 redisCache)
 
-O LangChain v1 introduziu `create_agent` (de `langchain.agents`) — o método **oficial e
-recomendado** — que executa sobre o LangGraph e expõe hooks (`before_model`, `wrap_model_call`,
-`after_model`, `wrap_tool_call`, ...) com middlewares prontos: `PIIMiddleware`,
-`SummarizationMiddleware`, `ModelRetryMiddleware`, `HumanInTheLoopMiddleware`,
-`LLMToolSelectorMiddleware`. `create_react_agent` (de `langgraph.prebuilt`) foi depreciado em
-favor dele.
+**Versões verificadas** (2026-06-09): `langchain==1.3.1`, `langgraph==1.2.0`, `langchain-openai==1.2.1`
 
-**Esta decisão é o "como" — não o "o quê".** Os requisitos (FR-001 retry, FR-014/015 guardrails,
-FR-018/019 contexto) são satisfeitos de qualquer modo; o que muda é se via middleware prebuilt ou
-via nós manuais.
+```python
+# Padrão novo — sem bind_tools
+from langchain.agents import create_agent
+from langchain.agents.middleware import PIIMiddleware, SummarizationMiddleware, ModelRetryMiddleware
 
-> Nota de cobertura (ver [learning-lesson de guardrails](../learning-lessons/guardrails_langchain_middleware.md)):
-> `PIIMiddleware` cobre PII built-in; **prompt injection / jailbreak / off-scope NÃO são built-in**
-> e exigem middleware custom ou NeMo Guardrails. "Usar middleware" não significa "tudo pronto".
+graph = create_agent(
+    model="openai:gpt-4o-mini",   # string OU ChatOpenAI object — ambos funcionam
+    tools=[buscar_horarios, criar_agendamento, ...],  # sem bind_tools
+    system_prompt=SYSTEM_PROMPT,
+    middleware=[
+        PIIMiddleware("email", strategy="redact", apply_to_input=True, apply_to_output=True),
+        PIIMiddleware("credit_card", strategy="block"),
+        ModelRetryMiddleware(max_retries=3, backoff_factor=2.0),
+        SummarizationMiddleware(model="openai:gpt-4o-mini", trigger=("tokens", 8000)),
+    ],
+    cache=RedisCache(redis_client),   # B4 nativo
+)  # → retorna CompiledStateGraph diretamente
+```
 
 ---
 
 ## Decisão
 
-**Adotar `create_agent` + middleware como o caminho padrão de implementação de P1/P4/P6.** É o
-método oficial e estável do LangChain v1.
+**Adotar `create_agent` + middleware como caminho padrão para P1/P4/P6/B7/B8.**
 
-1. **`MessagesState`** como classe base de `AgendAIState` — primitivo estável do LangGraph v1,
-   elimina boilerplate de `add_messages`. Mudança aditiva, compatível com threads existentes.
-2. **P4 (guardrails)**: `PIIMiddleware` built-in para PII; middleware custom (ou NeMo Guardrails)
-   para injection/off-scope. Ver [ADR-029] (a criar no B7).
-3. **P6 (contexto)**: `SummarizationMiddleware`.
-4. **P1 (retry)**: `ModelRetryMiddleware` complementando o `tenacity`/`pybreaker` do ADR-024.
-5. **Prudência normal de engenharia** (não um "gate" dramático): pinar a versão de
-   `langchain`/`langgraph`, verificar o import na versão pinada, manter os testes verdes
-   (constituição II), e confirmar que o managed LangGraph Server aceita o grafo de `create_agent`
-   como subgrafo (verificação técnica de integração, não de estabilidade da API).
-
-O pipeline de áudio (`transcribe_audio`/`synthesize_tts`), o `email_sender` e o
-`detect_input_type` permanecem como nós externos ao `create_agent`.
+1. **`langchain>=1.0`** adicionado às dependências do projeto (`pyproject.toml`).
+2. **B7 PII** (FR-014/016): `PIIMiddleware("email"/"credit_card"/"ip", strategy="redact"/"block")`
+   — cobre input, output e resultados de ferramentas.
+3. **B7 injection/off-scope** (FR-011/013): NÃO coberto por middleware built-in — spike em B7
+   entre regex determinístico e chamada a modelo pequeno. ADR-029 decide.
+4. **B8 contexto** (FR-018/019): `SummarizationMiddleware(model=..., trigger=("tokens", 8000))`.
+5. **P1 retry** (ADR-024): `ModelRetryMiddleware` complementa `tenacity`/`pybreaker` nos nós de
+   transcrição/API (que ficam fora do `create_agent`).
+6. **B4 cache**: `create_agent(..., cache=RedisCache(...))` — integração nativa, sem patch extra.
+7. Nós de áudio (`transcribe_audio`/`synthesize_tts`), `email_sender` e `detect_input_type`
+   **permanecem fora** do `create_agent` — o subgrafo substitui apenas `chat_with_llm` +
+   `execute_tools` + `process_tool_results`.
+8. **`AgendAIState`** migra para usar `MessagesState` como base (B7, aditivo, compatível com
+   threads existentes).
 
 ---
 
 ## Alternativas consideradas
 
 ### A) `create_agent` + middleware (adotada)
-- **Prós**: caminho oficial/recomendado; menos código manual; comportamentos prebuilt testados;
-  ponto único de extensão para PII, summarização, retry e (futuro) HITL.
-- **Contras**: acoplamento ao framework do LangChain — risco normal de dependência (não
-  "remoção sem aviso", como antes se temia incorretamente).
+- **Prós**: padrão oficial; menos código manual; PII e retry prebuilt; `cache=` nativo.
+- **Contras**: dependência do pacote `langchain` além de `langchain-core`; injection/off-scope ainda exige trabalho custom.
 
-### B) Nós manuais (a implementação legada, substituída)
-- **Prós**: controle total; só primitivos do LangGraph.
-- **Contras**: mais código para escrever e manter; reimplementa o que o middleware já oferece.
-- **Status**: deixa de ser "fallback por risco de remoção" — é apenas a abordagem anterior,
-  preterida. Permanece como referência se um requisito específico não couber no middleware.
+### B) `create_react_agent` (langgraph.prebuilt) + `pre_model_hook`/`post_model_hook`
+- **Prós**: sem depender do pacote `langchain` base; primitivos mais baixo nível.
+- **Contras**: sem middleware prebuilt; PII e summarização exigem implementação manual completa.
+- **Status**: fallback se `create_agent` mostrar incompatibilidade com o managed server.
+
+### C) Nós manuais (legado)
+- **Status**: mantido como referência; preterido mas preservado se houver requisito que não caiba no middleware.
 
 ---
 
 ## Consequências
 
 ### Positivas
-- Menos código manual para P1/P4/P6; um ponto de extensão coeso.
-- Alinha o projeto ao caminho oficial do LangChain v1 (suporte e docs futuros).
-- `PIIMiddleware` entrega a parte de PII de P4 sem regex caseiro.
+- Redução de código: `chat_with_llm` + `execute_tools` + `process_tool_results` → 1 `create_agent`.
+- PII (FR-014/016) e retry (FR-001) prebuilt — não precisam ser escritos do zero.
+- `SummarizationMiddleware` resolve B8 sem nó extra.
+- `cache=` nativo em `create_agent` simplifica B4.
 
-### Negativas / Trade-offs
-- Acoplamento ao sistema de middleware do LangChain (dependência normal).
-- Injection/off-scope ainda exigem trabalho (custom/NeMo) — middleware não cobre tudo.
+### Negativas
+- Injection/off-scope (FR-011/013) não são prebuilt — ainda precisam de spike em B7.
+- `langchain>=1.0` é uma dependência adicional (mas esperada para um projeto LangChain).
 
 ### Condições que revisam esta decisão
-1. LangChain depreciar/quebrar o middleware **de fato** (verificado em release notes oficiais, não
-   em relato de fórum) → reavaliar.
-2. O managed LangGraph Server não aceitar o grafo de `create_agent` como subgrafo → manter nós
-   manuais para os gaps afetados.
-
----
-
-## Lição de processo
-
-Uma afirmação factual ("API removida") entrou numa spec e numa ADR **sem verificação de fonte
-primária**, e quase virou base de uma decisão arquitetural (gate + fallback). Registrado em
-[learning-lessons/guardrails_langchain_middleware.md](../learning-lessons/guardrails_langchain_middleware.md):
-**toda alegação de remoção/deprecação de API deve ser confirmada em release notes oficiais, não
-em um relato isolado de fórum.**
+1. Managed LangGraph Server rejeitar o grafo do `create_agent` como subgrafo → fallback para nós manuais.
+2. `langchain` v2 mudar a API do `create_agent` de forma breaking → verificar e adaptar.
 
 ---
 
 ## Relação com outras decisões
 
-- **ADR-024** (retry): `ModelRetryMiddleware` complementa o `tenacity`/`pybreaker`.
-- **ADR-029** (a criar, B7): guardrails — `PIIMiddleware` + custom/NeMo.
-- **ADR-030** (a criar, B8): contexto — `SummarizationMiddleware`.
+- **ADR-024** (retry): `ModelRetryMiddleware` dentro de `create_agent`; `tenacity`/`pybreaker` nos nós externos (transcriber, api_client).
+- **ADR-029** (B7): guardrails — `PIIMiddleware` built-in + spike para injection/off-scope.
+- **ADR-030** (B8): contexto — `SummarizationMiddleware` built-in.
 - **Spec 007** (HITL): `HumanInTheLoopMiddleware` é a via natural do P9.
