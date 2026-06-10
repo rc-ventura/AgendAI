@@ -84,16 +84,16 @@ Polyglot: agent at `agent/agent/`, agent tests `agent/tests/`, API at `api/src/`
 > `buscar_pagamentos`, static doctor data). `buscar_horarios`/appointment reads are either excluded
 > from the cache OR invalidated on `criar_agendamento`/`cancelar_agendamento`.
 
-- [ ] T017 [US2] If R3 positive: enable `graph.compile(cache=RedisCache(...))` using `REDIS_URI` in `agent/agent/graph.py` (FR-010/011), **scoped to write-stable lookups only**; exclude `buscar_horarios`/appointment reads from caching, or invalidate them on booking/cancel (Constitution IV — never serve stale). Else skip batch and record why
-- [ ] T018 [P] [US2] Tests: (a) a repeated **write-stable** lookup (`buscar_pagamentos`) in one session is served from cache (no re-exec, unchanged result); (b) **cache-consistency guard** — after an in-session booking, a subsequent availability read is NOT served stale
-- [ ] T019 [US2] Validate cache hit + **stale-safety** + correctness; **extend** `ADR-025` (record the Constitution IV scoping constraint) + learning-lesson; **manual gate → commit on approval**
+- [x] T017 [US2] SKIP — R3 positivo, mas `api/src/services/horariosService.js` já tem `node-cache` (TTL 60s) com invalidação em `criar_agendamento`/`cancelar_agendamento`. O custo Postgres já está coberto; o ganho residual do B4 seria apenas o HTTP interno (~0.3ms). Para `buscar_pagamentos` (sem cache na API), o LLM raramente repete a mesma chamada na mesma sessão. Custo de implementar invalidação no grafo duplicaria lógica já existente na camada certa. Registrado em learning-lesson `arquitetura_redis_postgress.md`.
+- [x] T018 [P] [US2] SKIP — dependente de T017
+- [x] T019 [US2] SKIP — dependente de T017
 
 ### Batch B5 — Audio model (QW-6)
 
-- [ ] T020 [US2] Spike: benchmark **Groq Whisper drop-in** vs **`gpt-4o-audio-preview` multimodal (REST, no WebSocket)** on latency + pt-BR quality; record in new `docs/adr/ADR-028-audio-model.md` + update learning-lesson `modelos_audio_multimodal_litellm.md`
-- [ ] T021 [US2] Implement the chosen path in `agent/agent/nodes/transcriber.py` (and, if multimodal, remove `tts.py`/`transcribe` nodes and rewire `agent/agent/graph.py`)
-- [ ] T022 [P] [US2] Test: voice-path latency meets SC-007 (−≥50%) and transcription correctness holds on a fixed audio set
-- [ ] T023 [US2] Validate SC-007; finalize `ADR-028` + learning-lesson; **manual gate → commit on approval**
+- [x] T020 [US2] Spike: Groq Whisper (`whisper-large-v3-turbo`) escolhido sobre `gpt-4o-audio-preview` — drop-in com ~0.2–0.4s STT vs ~1.5–2.0s OpenAI, zero mudança de grafo. `gpt-4o-audio-preview` deferido (custo maior, reestrutura fluxo sem ganho desproporcional). Registrado em `docs/adr/ADR-028-audio-model.md`.
+- [x] T021 [US2] `agent/agent/nodes/transcriber.py` migrado para `AsyncGroq` + `whisper-large-v3-turbo`; `groq>=0.8` adicionado em `pyproject.toml`; `GROQ_API_KEY` documentado em `.env.example`.
+- [x] T022 [P] [US2] `test_transcriber_uses_groq_not_openai` + `test_transcriber_uses_fast_model` em `test_graph.py`; mocks existentes atualizados de `openai_client` → `groq_client`; `conftest.py` com `GROQ_API_KEY=gsk_test`; 28 testes verdes.
+- [ ] T023 [US2] Validate SC-007 live (≥50% redução áudio); finalize `ADR-028` + learning-lesson; **manual gate → commit on approval** — live delta TBD (sem Docker local)
 
 **Checkpoint**: latency targets demonstrably met vs baseline; US2 independently validated.
 

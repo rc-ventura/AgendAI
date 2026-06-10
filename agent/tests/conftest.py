@@ -1,3 +1,4 @@
+import os
 import pytest
 import httpx
 import respx
@@ -5,6 +6,11 @@ from unittest.mock import AsyncMock, MagicMock
 from langchain_core.messages import HumanMessage
 
 from agent.state import AgendAIState
+
+# Dummy API keys so SDK clients instantiate without error in tests.
+# Actual network calls are always mocked — these values are never sent.
+os.environ.setdefault("OPENAI_API_KEY", "sk-test")
+os.environ.setdefault("GROQ_API_KEY", "gsk_test")
 
 
 @pytest.fixture

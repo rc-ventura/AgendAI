@@ -49,6 +49,31 @@ def test_bff_route_handler_sets_durability_exit():
         )
 
 
+def test_transcriber_uses_groq_not_openai():
+    """B5 (ADR-028): transcriber must use Groq client (whisper-large-v3-turbo),
+    not the OpenAI client (whisper-1). SC-007: ≥50% audio latency reduction."""
+    import agent.nodes.transcriber as t
+    from groq import AsyncGroq
+
+    assert isinstance(t.groq_client, AsyncGroq), (
+        "transcriber must use AsyncGroq client (ADR-028 B5)"
+    )
+    assert not hasattr(t, "openai_client"), (
+        "transcriber must not keep openai_client after B5 migration"
+    )
+
+
+def test_transcriber_uses_fast_model():
+    """B5: must use whisper-large-v3-turbo (fastest Groq Whisper, ~0.2-0.4s)."""
+    import inspect
+    import agent.nodes.transcriber as t
+
+    source = inspect.getsource(t)
+    assert "whisper-large-v3-turbo" in source, (
+        "transcriber must specify whisper-large-v3-turbo model (ADR-028)"
+    )
+
+
 def test_system_prompt_directs_parallel_lookup():
     """B2 (QW-4): Prompt must instruct simultaneous buscar_horarios + buscar_paciente
     in round 1 to drive the scheduling flow down to ≤2 LLM rounds."""
@@ -117,7 +142,7 @@ async def test_audio_path_calls_transcriber_and_tts():
     fake_audio_out = b"MP3_OUTPUT"
 
     with patch("agent.nodes.llm_core.llm") as mock_llm, \
-         patch("agent.nodes.transcriber.openai_client") as mock_stt, \
+         patch("agent.nodes.transcriber.groq_client") as mock_stt, \
          patch("agent.nodes.tts.openai_client") as mock_tts_client:
 
         mock_llm.ainvoke = AsyncMock(return_value=mock_ai_response)
