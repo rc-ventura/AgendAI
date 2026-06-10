@@ -156,6 +156,114 @@ Um diagrama de impacto relativo ajuda na tomada de decisão de prioridade.
 
 ---
 
+## Aprendizado 6 — `ShallowRedisSaver` vs `RedisSaver`: qual usar em chatbot
+
+### A diferença fundamental
+
+**`RedisSaver` (padrão)**:
+```
+thread_123 → checkpoint_1 (turno 1, nó 1)
+thread_123 → checkpoint_2 (turno 1, nó 2)
+thread_123 → checkpoint_3 (turno 1, nó 3)
+thread_123 → checkpoint_4 (turno 2, nó 1)
+...N checkpoints acumulando indefinidamente
+```
+
+**`ShallowRedisSaver`**:
+```
+thread_123 → checkpoint_latest   ← sobrescreve a cada turno
+```
+
+### Por que Shallow é o correto para chatbot médico
+
+**Time-travel** (replay de estado passado) exige o `RedisSaver` completo. É o caso de uso de
+agentes de código e workflows com ramificação — onde o agente pode precisar "voltar" ao estado
+do nó 3 do turno 2.
+
+Um chatbot conversacional **não precisa de time-travel**. O que importa é: qual é o estado
+atual da conversa?
+
+### O paradoxo do `RedisSaver` em produção
+
+Redis é in-memory. Com `RedisSaver` e 6 nós por turno:
+
+```
+Sessão de 5 turnos  = 30 checkpoints por thread
+1.000 sessões       = 30.000 objetos de estado em RAM
+Estado AgendAI ~2KB → 60 MB só de checkpoints históricos
+```
+
+Com `ShallowRedisSaver`:
+```
+1.000 sessões = 1.000 objetos → ~2 MB
+```
+
+Para evitar OOM com `RedisSaver`, você configura TTL + eviction policy (`allkeys-lru`).
+Com eviction ativa, o Redis pode deletar checkpoints antigos sob pressão de memória —
+o "histórico completo" se torna ilusório. Você paga o custo de RAM sem a garantia de que
+o histórico estará lá.
+
+`ShallowRedisSaver` é honesto: armazena só o que o chatbot realmente precisa.
+
+### Quando `RedisSaver` faz sentido
+
+- Agentes com `interrupt()` + time-travel (debug de workflows longos)
+- Pipelines batch onde o estado de cada nó precisa ser auditável
+- Casos onde o dado do checkpoint é fonte primária de dados (não só contexto de conversa)
+
+> **Conclusão para AgendAI**: `ShallowRedisSaver` se e quando migrarmos o checkpointer para
+> Redis. O AgendAI não usa `interrupt()` (confirmado — confirmação de agendamento é
+> conversacional, não via primitivo HIL do LangGraph), portanto não há perda funcional.
+
+---
+
+## Aprendizado 7 — Custom checkpointer Redis no managed server via `langgraph.json`
+
+### O mecanismo existe (confirmado no código-fonte)
+
+```json
+// agent/langgraph.json
+{
+  "checkpointer": {
+    "backend": "custom",
+    "path": "./checkpointer.py:factory"
+  }
+}
+```
+
+O CLI bake isso como `ENV LANGGRAPH_CHECKPOINTER` na imagem. O servidor lê via
+`_parse.py`, verifica `backend == "custom"`, e inicia um gRPC Python com a factory
+(`grpc/servicers/checkpointer.py`). Confirmado via inspeção do código-fonte do
+`langgraph_api`.
+
+### Pré-requisitos para usar `ShallowRedisSaver` por essa via
+
+| Requisito | Status atual | Mudança |
+|---|---|---|
+| `langgraph.json` custom backend | ✅ Suportado | 3 linhas |
+| Factory Python (`ShallowRedisSaver`) | ❌ Falta | ~20 linhas |
+| Redis com RedisJSON module | ❌ `redis:7-alpine` | `redis/redis-stack:latest` |
+| Bug HIL #5074 (`AsyncRedisSaver`) | ✅ Não afeta AgendAI | Sem `interrupt()` |
+
+### Por que não implementar agora
+
+Com `durability: "exit"` (B3 ativo), o único write por turno ocorre **após** a resposta
+ser streamada ao browser. O usuário já viu a resposta; o write não está no caminho crítico
+da latência percebida. Trocar Postgres → Redis nesse write economizaria 50–200ms que o
+usuário não espera.
+
+### Quando ativar (critérios concretos)
+
+1. Volume simultâneo exceder ~200 sessões (contenção de conexões Postgres se torna visível)
+2. Custo Neon paid justificar alternativa mais barata em escala
+3. Necessidade de Redis Stack já estar na infra por outro motivo
+
+> **Decisão documentada**: implementar `ShallowRedisSaver` via custom checkpointer quando
+> um dos critérios acima for atingido. Estimativa de esforço: ~2h (factory + docker-compose
+> image change + smoke test). Não requer mudança no grafo ou no BFF.
+
+---
+
 ---
 
 ## B3 — Decisões de arquitetura: BFF, `exit` vs `async`, e `DeltaChannel` (2026-06-10)
