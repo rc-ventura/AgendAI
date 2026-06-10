@@ -91,8 +91,8 @@ Polyglot: agent at `agent/agent/`, agent tests `agent/tests/`, API at `api/src/`
 ### Batch B5 — Audio model (QW-6)
 
 - [x] T020 [US2] Spike: `gpt-4o-audio-preview` escolhido (mesma `OPENAI_API_KEY`, zero nova infra). Groq `whisper-large-v3-turbo` documentado como opção futura de latência mais baixa. Registrado em `docs/adr/ADR-028-audio-model.md`.
-- [x] T021 [US2] `agent/agent/nodes/transcriber.py` migrado de `whisper-1` (audio.transcriptions) para `gpt-4o-audio-preview` (chat.completions + input_audio content part). Grafo inalterado.
-- [x] T022 [P] [US2] `test_transcriber_uses_audio_preview_model` em `test_graph.py`; mocks existentes atualizados para `chat.completions.create`; 27 testes verdes.
+- [x] T021 [US2] **Opção simples (multimodal full)**: `transcriber.py` e `tts.py` removidos. `input_detector.py` cria `HumanMessage` com `input_audio` content part; `llm_core.py` adiciona `audio_llm` (`gpt-4o-audio-preview`, `modalities=["text","audio"]`) que entende áudio e gera áudio — extrai bytes quando sem `tool_calls`. Grafo simplificado de 7 para 5 nós.
+- [x] T022 [P] [US2] Testes atualizados: `test_audio_llm_uses_audio_preview_model`, `test_detect_input_audio_creates_human_message_with_content_part`, `test_chat_with_llm_audio_extracts_final_response`, `test_audio_path_uses_audio_llm_and_sets_final_response`. `test_routing.py` alinhado ao grafo simplificado. 61 testes verdes.
 - [ ] T023 [US2] Validate SC-007 live (≥50% redução áudio); finalize `ADR-028` + learning-lesson; **manual gate → commit on approval** — live delta TBD (sem Docker local)
 
 **Checkpoint**: latency targets demonstrably met vs baseline; US2 independently validated.
@@ -108,7 +108,7 @@ Polyglot: agent at `agent/agent/`, agent tests `agent/tests/`, API at `api/src/`
 - [ ] T024 [P] [US1] Failing-first tests in `agent/tests/test_nodes.py` + `api/tests/`: transient retry is masked, breaker opens after 3 fails, 4xx/409 is NOT retried, startup tolerates slow Postgres, **a retry around `email_sender` produces exactly one email (FR-006, no duplicate side effect)**, and **user-facing errors are pt-BR with no stack-trace/secret leakage (FR-024)** (per `contracts/resilience.md`)
 - [ ] T025 [P] [US1] Add deps: `pybreaker` to `agent/pyproject.toml`; `p-retry` + `async-retry` to `api/package.json`
 - [ ] T026 [US1] `agent/agent/nodes/llm_core.py`: `tenacity` retry (3×, exp) + `pybreaker` circuit breaker (fail_max=3, reset 30s) on the OpenAI call (ADR-024)
-- [ ] T027 [P] [US1] `agent/agent/nodes/transcriber.py`: `tenacity` retry (3×) on Whisper
+- [ ] T027 [P] [US1] ~~`agent/agent/nodes/transcriber.py`~~: removido em B5 (multimodal). Retry de `audio_llm` já coberto pelo pybreaker/tenacity em T026.
 - [ ] T028 [P] [US1] `agent/agent/api_client.py`: `tenacity` retry on `httpx.ConnectError`/`TimeoutException` only — never on 4xx
 - [ ] T029 [P] [US1] `api/src/db/connection.js`: `async-retry` startup (5×, ≤30s), bail on missing `DATABASE_URL`
 - [ ] T030 [P] [US1] `api/src/repositories/*.js`: `p-retry` on transient query errors only (not constraint/4xx)
