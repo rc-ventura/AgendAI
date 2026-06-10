@@ -49,24 +49,16 @@ def test_bff_route_handler_sets_durability_exit():
         )
 
 
-def test_transcriber_uses_audio_preview_model():
-    """B5 (ADR-028): transcriber must use gpt-4o-audio-preview via chat.completions,
-    not whisper-1 via audio.transcriptions. No new infra — same OPENAI_API_KEY."""
-    import inspect
-    import agent.nodes.transcriber as t
+def test_audio_llm_uses_audio_preview_model():
+    """B5 (ADR-028): audio_llm must use gpt-4o-audio-preview — no new infra, same OPENAI_API_KEY."""
+    from agent.nodes.llm_core import audio_llm
 
-    source = inspect.getsource(t)
-    assert "gpt-4o-audio-preview" in source, (
-        "transcriber must use gpt-4o-audio-preview (ADR-028 B5)"
-    )
-    assert "chat.completions" in source, (
-        "transcriber must use chat.completions API, not audio.transcriptions"
-    )
-    assert "whisper-1" not in source, (
-        "transcriber must not use whisper-1 after B5 migration"
-    )
-    assert "input_audio" in source, (
-        "transcriber must send audio via input_audio content part"
+    # ChatOpenAI wraps model name in different attrs depending on version
+    model_name = getattr(audio_llm, "model_name", None) or getattr(
+        getattr(audio_llm, "bound", None), "model_name", None
+    ) or ""
+    assert "audio-preview" in model_name, (
+        f"audio_llm must use gpt-4o-audio-preview (ADR-028 B5), got: {model_name!r}"
     )
 
 
@@ -130,26 +122,22 @@ async def test_email_pending_triggers_send_email(mock_api_client):
 
 
 @pytest.mark.asyncio
-async def test_audio_path_calls_transcriber_and_tts():
-    """US4: audio input → transcribe → llm → synthesize_tts"""
+async def test_audio_path_uses_audio_llm_and_sets_final_response():
+    """US4 / B5: audio_data → detect_input_type builds input_audio msg → audio_llm returns
+    audio bytes → final_response set. No transcriber.py or tts.py needed (ADR-028)."""
+    import base64
     from agent.graph import graph
 
-    mock_ai_response = AIMessage(content="Temos horários disponíveis!")
-    fake_audio_out = b"MP3_OUTPUT"
+    fake_mp3 = b"MP3_OUTPUT"
+    b64_audio = base64.b64encode(fake_mp3).decode()
 
-    with patch("agent.nodes.llm_core.llm") as mock_llm, \
-         patch("agent.nodes.transcriber.openai_client") as mock_stt, \
-         patch("agent.nodes.tts.openai_client") as mock_tts_client:
+    mock_audio_response = AIMessage(
+        content="Temos horários disponíveis!",
+        additional_kwargs={"audio": {"data": b64_audio, "id": "audio_x"}},
+    )
 
-        mock_llm.ainvoke = AsyncMock(return_value=mock_ai_response)
-        mock_choice = MagicMock()
-        mock_choice.message.content = "Quais horários disponíveis?"
-        mock_stt.chat.completions.create = AsyncMock(
-            return_value=MagicMock(choices=[mock_choice])
-        )
-        mock_response = MagicMock()
-        mock_response.read = MagicMock(return_value=fake_audio_out)
-        mock_tts_client.audio.speech.create = AsyncMock(return_value=mock_response)
+    with patch("agent.nodes.llm_core.audio_llm") as mock_audio_llm:
+        mock_audio_llm.ainvoke = AsyncMock(return_value=mock_audio_response)
 
         state = make_state(
             messages=[],
@@ -159,7 +147,7 @@ async def test_audio_path_calls_transcriber_and_tts():
         result = await graph.ainvoke(state, config={"configurable": {"thread_id": "test-3"}})
 
     assert result["input_type"] == "audio"
-    assert result["final_response"] == fake_audio_out
+    assert result["final_response"] == fake_mp3
 
 
 @pytest.mark.asyncio

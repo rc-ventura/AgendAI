@@ -1,3 +1,4 @@
+import base64
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, AIMessage, ToolMessage
 
@@ -29,6 +30,17 @@ Regras de negócio:
 
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2).bind_tools(ALL_TOOLS, parallel_tool_calls=True)
 
+# B5 (ADR-028): gpt-4o-audio-preview para sessões de voz — entende áudio e gera
+# áudio diretamente, eliminando transcriber.py e tts.py.
+audio_llm = ChatOpenAI(
+    model="gpt-4o-audio-preview",
+    temperature=0.2,
+    model_kwargs={
+        "modalities": ["text", "audio"],
+        "audio": {"voice": "alloy", "format": "mp3"},
+    },
+).bind_tools(ALL_TOOLS, parallel_tool_calls=True)
+
 
 def _sanitize_messages(messages: list) -> list:
     """Remove orphaned ToolMessages that lack a preceding AIMessage with matching tool_calls.
@@ -58,5 +70,18 @@ def _sanitize_messages(messages: list) -> list:
 async def chat_with_llm(state: AgendAIState) -> dict:
     sanitized = _sanitize_messages(list(state["messages"]))
     messages = [SystemMessage(content=SYSTEM_PROMPT)] + sanitized
+
+    if state.get("input_type") == "audio":
+        response = await audio_llm.ainvoke(messages)
+        # opção simples: sempre pede audio; extrai quando não há tool calls
+        if not getattr(response, "tool_calls", None):
+            audio_info = response.additional_kwargs.get("audio", {})
+            if audio_info and "data" in audio_info:
+                return {
+                    "messages": [response],
+                    "final_response": base64.b64decode(audio_info["data"]),
+                }
+        return {"messages": [response]}
+
     response = await llm.ainvoke(messages)
     return {"messages": [response]}

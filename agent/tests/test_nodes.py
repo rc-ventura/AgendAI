@@ -165,25 +165,25 @@ async def test_email_sender_cancelamento():
     assert result["email_pending"] is False
 
 
-# ── transcriber ───────────────────────────────────────────────────────────────
+# ── input_detector: audio → HumanMessage com input_audio content part ────────
 
-@pytest.mark.asyncio
-async def test_transcriber_adds_human_message():
-    from agent.nodes.transcriber import transcribe_audio
+def test_detect_input_audio_creates_human_message_with_content_part():
+    """B5: detect_input_type deve criar HumanMessage com input_audio content part para áudio."""
+    import base64
+    from agent.nodes.input_detector import detect_input_type
+    from langchain_core.messages import HumanMessage
 
-    state = make_state(audio_data=b"fake_audio_bytes", input_type="audio")
+    state = make_state(audio_data=b"fake_audio_bytes", input_type="text")
+    result = detect_input_type(state)
 
-    mock_choice = MagicMock()
-    mock_choice.message.content = "Quais horários disponíveis?"
-    mock_response = MagicMock()
-    mock_response.choices = [mock_choice]
-
-    with patch("agent.nodes.transcriber.openai_client") as mock_client:
-        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
-        result = await transcribe_audio(state)
-
-    assert len(result["messages"]) == 1
-    assert result["messages"][0].content == "Quais horários disponíveis?"
+    assert result["input_type"] == "audio"
+    msg = result["messages"][0]
+    assert isinstance(msg, HumanMessage)
+    assert isinstance(msg.content, list)
+    assert msg.content[0]["type"] == "input_audio"
+    # bytes corretamente codificados em base64
+    decoded = base64.b64decode(msg.content[0]["input_audio"]["data"])
+    assert decoded == b"fake_audio_bytes"
 
 
 # ── tools: API degradation (TST-03) ───────────────────────────────────────────
@@ -244,41 +244,26 @@ async def test_email_sender_continues_after_smtp_failure():
     assert result["email_payload"] is None
 
 
-# ── transcriber: corrupted audio (TST-06) ─────────────────────────────────────
+# ── llm_core: audio_llm extrai audio quando sem tool_calls (TST-06) ──────────
 
 @pytest.mark.asyncio
-async def test_transcriber_raises_on_corrupted_audio():
-    """TST-06: Whisper API raises on invalid audio bytes — error propagates."""
-    from agent.nodes.transcriber import transcribe_audio
+async def test_chat_with_llm_audio_extracts_final_response():
+    """B5/TST-06: chat_with_llm extrai bytes de áudio quando a resposta não tem tool_calls."""
+    import base64
+    from agent.nodes.llm_core import chat_with_llm
 
-    state = make_state(audio_data=b"\x00\x01\x02corrupted", input_type="audio")
+    fake_mp3 = b"MP3_BYTES"
+    b64_audio = base64.b64encode(fake_mp3).decode()
 
-    with patch("agent.nodes.transcriber.openai_client") as mock_client:
-        mock_client.chat.completions.create = AsyncMock(
-            side_effect=Exception("Audio file could not be decoded")
-        )
-        with pytest.raises(Exception, match="Audio file could not be decoded"):
-            await transcribe_audio(state)
-
-
-# ── tts ───────────────────────────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_tts_sets_final_response_bytes():
-    from agent.nodes.tts import synthesize_tts
-
-    state = make_state(
-        input_type="audio",
-        messages=[HumanMessage(content="Olá"), AIMessage(content="Temos horários disponíveis!")],
-        final_response=None,
+    mock_response = AIMessage(
+        content="Temos horários disponíveis!",
+        additional_kwargs={"audio": {"data": b64_audio, "id": "audio_123"}},
     )
 
-    fake_audio = b"MP3_BYTES"
+    with patch("agent.nodes.llm_core.audio_llm") as mock_audio_llm:
+        mock_audio_llm.ainvoke = AsyncMock(return_value=mock_response)
+        state = make_state(input_type="audio")
+        result = await chat_with_llm(state)
 
-    with patch("agent.nodes.tts.openai_client") as mock_client:
-        mock_response = MagicMock()
-        mock_response.read = MagicMock(return_value=fake_audio)
-        mock_client.audio.speech.create = AsyncMock(return_value=mock_response)
-        result = await synthesize_tts(state)
-
-    assert result["final_response"] == fake_audio
+    assert result["final_response"] == fake_mp3
+    assert len(result["messages"]) == 1
