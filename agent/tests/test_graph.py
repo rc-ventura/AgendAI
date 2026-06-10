@@ -57,8 +57,8 @@ def test_audio_llm_uses_audio_preview_model():
     model_name = getattr(audio_llm, "model_name", None) or getattr(
         getattr(audio_llm, "bound", None), "model_name", None
     ) or ""
-    assert "audio-preview" in model_name, (
-        f"audio_llm must use gpt-4o-audio-preview (ADR-028 B5), got: {model_name!r}"
+    assert "audio" in model_name, (
+        f"audio_llm must use a gpt-audio model (ADR-028 B5), got: {model_name!r}"
     )
 
 

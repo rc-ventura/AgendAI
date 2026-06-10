@@ -30,10 +30,10 @@ Regras de negócio:
 
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2).bind_tools(ALL_TOOLS, parallel_tool_calls=True)
 
-# B5 (ADR-028): gpt-4o-audio-preview para sessões de voz — entende áudio e gera
+# B5 (ADR-028): gpt-audio para sessões de voz — entende áudio e gera
 # áudio diretamente, eliminando transcriber.py e tts.py.
 audio_llm = ChatOpenAI(
-    model="gpt-4o-audio-preview",
+    model="gpt-audio",
     temperature=0.2,
     model_kwargs={
         "modalities": ["text", "audio"],
