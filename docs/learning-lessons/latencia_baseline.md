@@ -100,3 +100,27 @@ Ver detalhes em [guardrails_langchain_middleware.md](./guardrails_langchain_midd
 | SC-006 | Writes de checkpoint/turno | TBD | −≥80% (exit mode = ~1 em vez de ~6) |
 | SC-007 | Latência voz (transcrição+síntese) | TBD | −≥50% do baseline |
 | SC-008 | Custo/conversa | TBD | ≤ baseline à medida que histórico cresce |
+
+---
+
+## B1 — Parallel tool calls (`parallel_tool_calls=True`) — implementado 2026-06-10
+
+**Tática**: `bind_tools(ALL_TOOLS, parallel_tool_calls=True)` em `agent/agent/nodes/llm_core.py`.
+
+**Problema original**: sem o flag, quando o modelo OpenAI decide emitir múltiplas chamadas de
+ferramenta em um único turno, a ausência do flag `parallel_tool_calls` pode fazer com que o SDK
+não sinalize concorrência explicitamente — e em algumas versões o `ToolNode` executava as chamadas
+sequencialmente, adicionando uma round-trip extra por ferramenta.
+
+**Solução**: o flag `parallel_tool_calls=True` é passado na API OpenAI como parâmetro top-level.
+O `ToolNode` do LangGraph já executa as tool calls de um `AIMessage` em concorrência (asyncio gather);
+o flag garante que o modelo as emita em um único AIMessage ao invés de em AIMessages separados.
+
+**Ganho esperado**: turnos que chamam ≥2 ferramentas independentes (ex.: `buscar_horarios` +
+`buscar_paciente` no mesmo turno) ganham concorrência — sem polling sequential adicional.
+
+**Validação**: `test_llm_bound_with_parallel_tool_calls` (T008) + 63 pytest verdes.
+
+**Lição de processo**: para qualquer flag de configuração de chamada LLM/tool, preferir ser
+explícito no `bind_tools` (ou no objeto `ChatOpenAI` passado ao `create_agent`) ao invés de
+depender do default do SDK, que pode mudar entre versões.

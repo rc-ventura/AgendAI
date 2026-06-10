@@ -22,7 +22,7 @@ Regras de negócio:
 4. Responda no mesmo idioma que o paciente usar (português ou inglês).
 5. Seja cordial e objetivo. Saudações e despedidas não precisam de chamada de ferramenta."""
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2).bind_tools(ALL_TOOLS)
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2).bind_tools(ALL_TOOLS, parallel_tool_calls=True)
 
 
 def _sanitize_messages(messages: list) -> list:

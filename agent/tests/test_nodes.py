@@ -88,6 +88,15 @@ async def test_buscar_pagamentos_tool(mock_api_client):
 
 # ── llm_core ──────────────────────────────────────────────────────────────────
 
+def test_llm_bound_with_parallel_tool_calls():
+    """B1 (QW-1): LLM must be bound with parallel_tool_calls=True for concurrent tool execution."""
+    from agent.nodes.llm_core import llm
+    bound_kwargs = getattr(llm, "kwargs", {})
+    assert bound_kwargs.get("parallel_tool_calls") is True, (
+        "LLM must be bound with parallel_tool_calls=True (QW-1 B1)"
+    )
+
+
 @pytest.mark.asyncio
 async def test_llm_core_returns_ai_message():
     from agent.nodes.llm_core import chat_with_llm

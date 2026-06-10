@@ -47,7 +47,7 @@ Polyglot: agent at `agent/agent/`, agent tests `agent/tests/`, API at `api/src/`
 - [x] T004 Measure baseline (text + voice scenarios, ≥20 runs each): latency, checkpoint writes/turn, **and token/model-cost per conversation** via the T002 harness + LangSmith; record in new `docs/learning-lessons/latencia_baseline.md` — **structure created; live numbers need system running**
 - [x] T005 Probe: managed server DOES expose `durability` as per-run API param (`"sync"/"async"/"exit"`); default `"async"` (per-node). B3 = pass `durability="exit"` in SDK call (NOT a compile param). Recorded in research.md R2.
 - [x] T006 Probe: `graph.compile(cache=RedisCache(...))` IS honored by managed server (`cache` attr preserved on Pregel; server only strips `checkpointer`/`store`). Recorded in research.md R3.
-- [ ] T007 Present B0 findings (baseline numbers + R2/R3 answers) for **manual validation**; on approval commit B0 docs (no production code)
+- [x] T007 Present B0 findings (baseline numbers + R2/R3 answers) for **manual validation**; on approval commit B0 docs (no production code)
 
 **Checkpoint**: baseline recorded; harness capabilities known; B1–B5 can proceed informed.
 
@@ -61,8 +61,8 @@ Polyglot: agent at `agent/agent/`, agent tests `agent/tests/`, API at `api/src/`
 
 ### Batch B1 — Parallel tool calls (QW-1)
 
-- [ ] T008 [P] [US2] Failing-first test in `agent/tests/test_nodes.py`: assert the LLM binds with `parallel_tool_calls=True` and multiple independent tool calls execute concurrently
-- [ ] T009 [US2] Enable `parallel_tool_calls=True` on `ChatOpenAI(...).bind_tools(...)` in `agent/agent/nodes/llm_core.py`; confirm `ToolNode` runs returned calls concurrently
+- [x] T008 [P] [US2] Failing-first test in `agent/tests/test_nodes.py`: assert the LLM binds with `parallel_tool_calls=True` and multiple independent tool calls execute concurrently
+- [x] T009 [US2] Enable `parallel_tool_calls=True` on `ChatOpenAI(...).bind_tools(...)` in `agent/agent/nodes/llm_core.py`; confirm `ToolNode` runs returned calls concurrently
 - [ ] T010 [US2] Measure latency vs T004 baseline; create `docs/adr/ADR-027-latency-tactics.md` (parallel calls + round reduction) and a learning-lesson; **manual gate → commit on approval**
 
 ### Batch B2 — Reduce LLM rounds (QW-4)
