@@ -8,6 +8,7 @@ class AgendAIState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     input_type: Literal["text", "audio"]
     audio_data: bytes | None
+    audio_format: str | None  # "wav", "mp3", "webm", "ogg" — declarado pelo chamador
     session_id: str
     email_pending: bool
     email_payload: dict | None

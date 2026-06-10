@@ -10,6 +10,7 @@ def make_state(**kwargs) -> AgendAIState:
         "messages": [],
         "input_type": "text",
         "audio_data": None,
+        "audio_format": None,
         "session_id": "test-graph",
         "email_pending": False,
         "email_payload": None,

@@ -18,6 +18,7 @@ def make_state(**kwargs) -> AgendAIState:
         "messages": [HumanMessage(content="Olá")],
         "input_type": "text",
         "audio_data": None,
+        "audio_format": None,
         "session_id": "test",
         "email_pending": False,
         "email_payload": None,
