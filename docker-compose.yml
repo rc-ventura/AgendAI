@@ -88,10 +88,15 @@ services:
     build:
       context: ./agent-ui-pro
       args:
-        # Same-origin: a UI é servida pelo nginx, então a API é o mesmo origin
+        # Same-origin: browser usa /api como BFF proxy; usuário digita http://localhost:8080
+        # no form e buildBffUrl() em Stream.tsx appenda /api automaticamente.
         NEXT_PUBLIC_API_URL: ""
         NEXT_PUBLIC_ASSISTANT_ID: agendai_agent
-        NEXT_PUBLIC_LANGGRAPH_API_KEY: ${LANGGRAPH_AUTH_TOKEN}
+        NEXT_PUBLIC_LANGGRAPH_API_KEY: ""
+    environment:
+      # Runtime (server-side apenas) — usados pelo BFF Route Handler /app/api/[..._path]
+      LANGGRAPH_API_URL: http://langgraph-server:8123
+      LANGGRAPH_AUTH_TOKEN: ${LANGGRAPH_AUTH_TOKEN}
     depends_on:
       - langgraph-server
     restart: unless-stopped

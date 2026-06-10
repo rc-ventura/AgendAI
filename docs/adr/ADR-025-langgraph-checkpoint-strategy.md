@@ -200,6 +200,63 @@ O maior ganho de latência acessível **sem mudança de infraestrutura** é redu
 
 ---
 
+## Implementação B3 — `durability: "exit"` via BFF Next.js (2026-06-10)
+
+**Status do ADR**: Accepted (B3 implementado)
+
+### Conclusão da sonda (T005/R2)
+
+O managed LangGraph Server expõe `durability` como **parâmetro por-run na API**, não como config de compile-time. A referência no código do servidor é `langgraph_api/models/run.py:125 RunCreateDict.durability`. Modos:
+
+- `"async"` (default): checkpoint assíncrono após cada nó
+- `"sync"`: checkpoint síncrono antes do próximo nó
+- `"exit"`: checkpoint **somente ao final do run** (turn boundary)
+
+### Princípio arquitetural aplicado
+
+> "A durabilidade deve ser configurada na chamada de execução do grafo (back-end), não na interface do cliente (UI). O cliente apenas dispara eventos — não controla a estratégia de persistência."
+
+### Mudança aplicada — BFF Route Handler (Node.js, server-side)
+
+```typescript
+// agent-ui-pro/src/app/api/[..._path]/route.ts
+// Proxy BFF usando o padrão oficial langgraph-nextjs-api-passthrough.
+// durability: "exit" injetado aqui — em Node.js — para todos os runs.
+initApiPassthrough({
+  apiUrl: process.env.LANGGRAPH_API_URL,        // server-side, nunca NEXT_PUBLIC_
+  headers: () => ({ "X-Api-Key": process.env.LANGGRAPH_AUTH_TOKEN }),
+  bodyParameters: (req, body) => {
+    if (req.method === "POST" && req.url.includes("/runs")) {
+      return { ...body, durability: "exit" };   // ← QW-3 B3
+    }
+    return body;
+  },
+  baseRoute: "api",
+  runtime: "nodejs",
+});
+```
+
+O browser chama `/api/threads/:id/runs/stream` (relativo ao origin nginx). O Route Handler:
+1. Recebe o request
+2. Injeta `durability: "exit"` no body
+3. Encaminha para `http://langgraph-server:8123` com `X-Api-Key` server-side
+4. Proxy SSE stream de volta ao browser
+
+`LANGGRAPH_AUTH_TOKEN` nunca é exposto no browser (não tem prefixo `NEXT_PUBLIC_`).
+
+### Impacto esperado
+
+Com 6 nós no grafo atual (`detect_input → transcribe? → chat_with_llm ↔ execute_tools → process_tool_results → send_email → synthesize_tts?`), o modo default `"async"` produz ~6 writes/turno. Com `"exit"`, reduz para **1 write/turno** — redução teórica de ~83% (dentro do target SC-006: ≥80%).
+
+Ressalva: se o processo do servidor morrer mid-run com `durability="exit"`, o estado parcial não é recuperável. Para o AgendAI (idempotente — agendamentos via API REST), isso é aceitável: o usuário resubmete a mensagem.
+
+### Verificação
+
+- `test_bff_route_handler_sets_durability_exit` em `agent/tests/test_graph.py` (T015) — 65 pytest verdes
+- Contagem de writes/turno TBD (requer sistema em execução)
+
+---
+
 ## Referências
 
 - [ADR-014](./ADR-014-checkpointer-inmem.md) — checkpointer in-memory para MVP (supersedido em produção)

@@ -19,6 +19,36 @@ def make_state(**kwargs) -> AgendAIState:
     return base
 
 
+
+def test_bff_route_handler_sets_durability_exit():
+    """B3 (QW-3): durability='exit' must be enforced server-side in the Next.js BFF
+    Route Handler, not in browser UI code (ADR-025 B3, SC-006)."""
+    import pathlib
+    root = pathlib.Path(__file__).parent.parent.parent
+
+    route_handler = root / "agent-ui-pro/src/app/api/[..._path]/route.ts"
+    assert route_handler.exists(), (
+        "BFF Route Handler must exist at agent-ui-pro/src/app/api/[..._path]/route.ts"
+    )
+    content = route_handler.read_text()
+    assert 'durability' in content, (
+        "Route Handler must inject durability (QW-3 B3)"
+    )
+    assert "bodyParameters" in content, (
+        "Route Handler must use bodyParameters — the official LangGraph BFF pattern"
+    )
+
+    # durability must NOT appear in browser-side components or hooks
+    for browser_file in [
+        root / "agent-ui-pro/src/components/thread/index.tsx",
+        root / "agent-ui-pro/src/providers/Stream.tsx",
+    ]:
+        assert 'durability' not in browser_file.read_text(), (
+            f"durability must not appear in browser code {browser_file.name} "
+            "(set server-side in BFF Route Handler only)"
+        )
+
+
 def test_system_prompt_directs_parallel_lookup():
     """B2 (QW-4): Prompt must instruct simultaneous buscar_horarios + buscar_paciente
     in round 1 to drive the scheduling flow down to ≤2 LLM rounds."""
