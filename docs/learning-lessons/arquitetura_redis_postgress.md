@@ -236,28 +236,54 @@ ou outro intermediário. UI puro nunca é o lugar correto.
 
 Os três modos de durabilidade e o que cada um faz:
 
-| Modo | Quando checkpointa | I/O por turno | Recovery em crash |
-|---|---|---|---|
-| `sync` | Antes de cada nó, **bloqueante** | ~6 writes síncronos | ✅ Total — recupera do nó exato |
-| `async` *(padrão)* | Após cada nó, **não-bloqueante** | ~6 writes assíncronos | ⚠️ Quase total — pode perder último nó |
-| `exit` | Apenas ao final do run | **1 write** | ❌ Zero mid-run — turn inteiro se perde |
+| Modo | Quando checkpointa | Bloqueia o próximo nó? | Writes/turno | Recovery em crash |
+|---|---|---|---|---|
+| `sync` | Antes de cada nó | **Sim** (bloqueante) | ~6 | ✅ Total — recupera do nó exato |
+| `async` *(padrão)* | Após cada nó | **Não** (background) | ~6 | ⚠️ Quase total — pode perder último nó |
+| `exit` | Apenas ao final | **Não** (só no final) | **1** | ❌ Zero mid-run — turn inteiro se perde |
 
-**Por que não `async`:**
-- `async` ainda produz ~6 writes por turno (igual ao `sync` em quantidade)
-- A única diferença é que o write não bloqueia o próximo nó — o ganho de latência é
-  pequeno (o Postgres processa os writes em paralelo, mas ainda consome I/O e conexões)
-- Para o Neon free tier (50–200ms/write), `async` = 6 writes × overhead = mesma espera
-  total, só distribuída diferente na timeline
-- O `exit` é a única opção que reduz o **número** de writes: 6 → 1 (−83%)
+#### Latência: `sync` ≠ `async` — a diferença é grande
 
-**Trade-off escolhido (`exit`):**
+**`sync` adiciona latência visível ao usuário:**
+
+```
+Nó 1 executa (500ms) → WAIT write Postgres (150ms) → Nó 2 executa (800ms) → WAIT write (150ms) → ...
+                        ↑ bloqueante                                           ↑ bloqueante
+Total de overhead = 6 nós × 150ms = 900ms somados ao tempo de execução
+```
+
+**`async` remove os writes do caminho crítico:**
+
+```
+Nó 1 executa (500ms) → dispara write em background → Nó 2 INICIA imediatamente (800ms)
+                                 ↓                             ↑
+                         write (150ms) termina          durante execução do Nó 2
+Total de overhead ≈ 0ms visível — o write "some" dentro da latência do próximo nó
+```
+
+A condição para isso funcionar: `tempo_do_nó > tempo_do_write`. No AgendAI, onde nós LLM
+levam 800ms–2s e writes no Neon levam 50–200ms, essa condição é quase sempre verdadeira.
+`async` e `exit` têm **latência visível ao usuário similar**.
+
+#### Então por que `exit` e não `async`?
+
+A diferença não é latência — é **carga no banco e durabilidade**:
 
 | | `async` | `exit` |
 |---|---|---|
 | Writes/turno | ~6 | **1** |
-| Latência checkpoint | Distribuída entre nós | Concentrada no final |
-| Recovery em crash | Recupera do último nó | ❌ Perde o turno inteiro |
-| Risco de side effect | Baixo | **Existe** (ver seção 3) |
+| Overhead de latência visível | ≈ 0ms | ≈ 150ms (só no final) |
+| Conexões Postgres consumidas | 6 por turno | 1 por turno |
+| Custo de armazenamento | Cresce 6× mais rápido | Mínimo |
+| Recovery em crash | ⚠️ Recupera do último nó | ❌ Perde o turno inteiro |
+| Risco de side effect duplicado | Baixo | **Existe** (ver seção 3) |
+
+`exit` é escolhido porque:
+1. **Reduz carga no Postgres em 83%** — especialmente relevante no Neon free tier com
+   limite de conexões simultâneas
+2. **Reduz custo de armazenamento** — cada checkpoint armazena o estado completo; 6×
+   mais writes = 6× mais storage por conversa
+3. Para um chat conversacional, perder um turno em crash é aceitável (usuário retenta)
 
 Para o AgendAI — chat conversacional onde cada turno é independente — perder um turno
 inteiro em crash é aceitável: o usuário simplesmente retenta a mensagem.
@@ -332,49 +358,113 @@ Opção A quando o sistema entrar em produção real.
 
 ### 4. `DeltaChannel` — otimização de tamanho de checkpoint (deferida)
 
-`DeltaChannel` e `durability: "exit"` são complementares mas independentes:
+#### O problema: crescimento quadrático do canal `messages`
 
-| Técnica | O que reduz | Mecanismo |
+`DeltaChannel` e `durability: "exit"` são **ortogonais** — atacam dimensões diferentes:
+
+| Técnica | Dimensão reduzida | De → Para |
 |---|---|---|
-| `durability: "exit"` | **Frequência** de writes | 6 writes/turno → 1 write/turno |
-| `DeltaChannel` | **Tamanho** de cada write | Armazena deltas, não estado completo |
+| `durability: "exit"` | **Frequência** de writes | ~6 writes/turno → 1 write/turno |
+| `DeltaChannel` | **Tamanho** de cada write | completo → incremental |
 
-**O problema que `DeltaChannel` resolve:**
 O canal `messages` em `AgendAIState` usa `add_messages` (append-only). Sem `DeltaChannel`,
-cada checkpoint armazena a lista **completa** de mensagens. Com 20 turnos de conversa,
-o checkpoint do turno 20 armazena todas as 40+ mensagens anteriores — crescimento O(n²)
-em armazenamento total ao longo da conversa.
+cada checkpoint serializa a lista **completa** de mensagens acumuladas:
 
-Com `DeltaChannel`, o checkpoint armazena apenas os **deltas** (mensagens novas daquele
-turno). O LangGraph reconstrói o estado completo fazendo replay dos deltas. Crescimento
-linear em vez de quadrático.
-
-**Implementação seria uma linha em `state.py`:**
-
-```python
-from langgraph.channels.delta import DeltaChannel
-
-class AgendAIState(TypedDict):
-    messages: Annotated[list[AnyMessage], DeltaChannel(add_messages)]  # era só add_messages
+```
+Turno 1:  checkpoint = [msg1, msg2]               → 2 msgs serializadas
+Turno 2:  checkpoint = [msg1, msg2, msg3, msg4]   → 4 msgs serializadas
+Turno 3:  checkpoint = [msg1, msg2, ..., msg6]    → 6 msgs serializadas
+...
+Turno N:  checkpoint = [msg1, msg2, ..., msg2N]   → 2N msgs serializadas
 ```
 
-**Por que foi deferido:**
-`DeltaChannel` está marcado como **beta** no LangGraph 1.2.0:
+Armazenamento total = Σ(2i) para i=1..N = N×(N+1) mensagens armazenadas = **O(N²)**.
 
-> *"Beta. The API and on-disk representation may change in future releases. Threads written
-> with DeltaChannel today are expected to remain readable, but the surrounding contract
-> is not yet stable."*
+Com `durability: "exit"` (1 write/turno) já reduzimos a frequência. Mas o **tamanho** de
+cada write ainda cresce linearmente com a conversa. Em uma conversa de 20 turnos com
+mensagens médias de 500 bytes cada: checkpoint do turno 20 ≈ 40 mensagens × 500B = 20KB
+só de `messages` — mais todo o resto do estado.
 
-Riscos específicos para o managed LangGraph Server:
-1. O servidor desserializa/reserializa o estado — se o formato `_DeltaSnapshot` mudar
-   entre versões da imagem, threads antigas ficam ilegíveis
-2. O contrato de `BaseCheckpointSaver.get_delta_channel_history` ainda não é estável
-3. Não há garantia de compatibilidade forward com a imagem `langgraph/langgraph-server`
+#### Como `DeltaChannel` resolve
 
-**Critério de ativação**: implementar quando `DeltaChannel` sair de beta (provavelmente
-LangGraph 2.x) ou quando conversas longas (>20 turnos) forem o caso de uso dominante.
-Para o AgendAI atual (consultas pontuais, 3–8 turnos por agendamento), o `exit` já resolve
-o overhead crítico sem expor risco de instabilidade.
+`DeltaChannel` instrui o LangGraph a armazenar apenas o **delta** de cada turno:
+
+```
+Turno 1:  delta_checkpoint = [msg1, msg2]         → 2 msgs (igual)
+Turno 2:  delta_checkpoint = [msg3, msg4]         → só 2 msgs novas
+Turno 3:  delta_checkpoint = [msg5, msg6]         → só 2 msgs novas
+...
+Turno N:  delta_checkpoint = [msg(2N-1), msg(2N)] → sempre 2 msgs novas
+```
+
+Para reconstruir o estado, o LangGraph faz **replay** dos deltas desde o último snapshot
+completo. O snapshot completo é escrito a cada `snapshot_frequency` updates (padrão: 1000).
+
+Armazenamento total = N × 2 mensagens = **O(N)** — crescimento linear.
+
+#### Implementação (uma linha em `state.py`)
+
+```python
+# agent/agent/state.py — FUTURO (não implementado ainda)
+from langgraph.channels.delta import DeltaChannel
+from langgraph.graph.message import add_messages
+
+class AgendAIState(TypedDict):
+    #  antes:  Annotated[list[AnyMessage], add_messages]
+    messages: Annotated[list[AnyMessage], DeltaChannel(add_messages)]
+    # ... resto inalterado
+```
+
+`add_messages` já satisfaz o contrato do `DeltaChannel`: é determinístico e
+batching-invariant — `add_messages(add_messages(s, xs), ys) == add_messages(s, xs + ys)`.
+
+#### Por que foi deferido — o risco de beta instável
+
+`DeltaChannel` está marcado como **beta** no LangGraph 1.2.0 com aviso explícito no
+código-fonte:
+
+```python
+class DeltaChannel:
+    """
+    !!! warning "Beta"
+        DeltaChannel is in beta. The API and on-disk representation may
+        change in future releases. Threads written with DeltaChannel today
+        are expected to remain readable, but the surrounding contract
+        (BaseCheckpointSaver.get_delta_channel_history, the _DeltaSnapshot
+        blob shape, the counters_since_delta_snapshot metadata field)
+        is not yet stable.
+    """
+```
+
+Riscos específicos para o managed LangGraph Server (`langgraph/langgraph-server`):
+
+1. **Incompatibilidade de formato** — o `_DeltaSnapshot` blob shape pode mudar entre
+   versões da imagem Docker. Um thread criado com LG 1.2.x pode se tornar ilegível após
+   upgrade para LG 2.x se o formato interno mudar.
+
+2. **Contrato instável** — `BaseCheckpointSaver.get_delta_channel_history` ainda não é
+   estável; o servidor gerenciado pode não implementar a interface corretamente em todas
+   as versões.
+
+3. **Threads antigas continuam legíveis** (prometido pelo aviso), mas o comportamento de
+   mixed threads (parte com `LastValue`, parte com `DeltaChannel`) em histórico existente
+   não está documentado.
+
+#### Comparação de impacto vs risco
+
+| | `durability: "exit"` | `DeltaChannel` |
+|---|---|---|
+| Impacto para AgendAI hoje | Alto — turno 1 já beneficia | Baixo — conversa média tem 3–8 turnos |
+| Risco de instabilidade | Nenhum (parâmetro de runtime) | Médio — beta com formato instável |
+| Complexidade de rollback | Trivial (remover do BFF) | Difícil — threads existentes no formato antigo |
+| Quando ativa valor máximo | Imediatamente | Conversas longas (>20 turnos) |
+
+**Critério de ativação**: implementar quando `DeltaChannel` sair de beta **e** quando
+conversas longas (>20 turnos) forem o caso de uso dominante — ou quando o tamanho dos
+checkpoints for identificado como gargalo mensurável em produção.
+
+Para o AgendAI atual (consultas pontuais, 3–8 turnos por agendamento), o ganho seria
+marginal. `durability: "exit"` já captura o overhead crítico.
 
 ---
 
