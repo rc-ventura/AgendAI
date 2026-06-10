@@ -156,6 +156,228 @@ Um diagrama de impacto relativo ajuda na tomada de decisão de prioridade.
 
 ---
 
+---
+
+## B3 — Decisões de arquitetura: BFF, `exit` vs `async`, e `DeltaChannel` (2026-06-10)
+
+### 1. Onde vive o `durability` — e por que isso exige um BFF
+
+**Hipótese inicial**: `checkpoint_mode='exit'` seria configurado em `graph.py` (compile-time)
+ou em `langgraph.json` — decisão do backend LangGraph.
+
+**Sonda B0 revelou**: o parâmetro `durability` é lido do **payload HTTP por-run**:
+
+```python
+# langgraph_api/models/run.py:276-279 (código-fonte do servidor gerenciado)
+durability = payload.get("durability")   # lê do corpo da requisição
+if durability is None:
+    checkpoint_during = payload.get("checkpoint_during")
+    durability = "async" if checkpoint_during in (None, True) else "exit"
+```
+
+Não existe `env var` de default, nem campo em `langgraph.json`, nem parâmetro de
+`graph.compile()`. Cada run decide sua durabilidade no momento da criação.
+
+**Consequência**: quem cria o run controla a durabilidade. Em Python puro:
+
+```python
+run = await client.runs.create(
+    thread_id=thread["thread_id"],
+    assistant_id="agent",
+    durability="exit",  # aqui, no código que chama o servidor
+)
+```
+
+**Por que não pode ficar na UI (browser):**
+
+1. **Segurança e consistência** — durabilidade afeta uso de recursos do banco. O cliente
+   (browser) não deve controlar isso: um cliente malicioso poderia forçar `sync` em todos
+   os runs e sobrecarregar o Postgres.
+2. **Princípio arquitetural** — a UI dispara eventos; o servidor (ou o BFF intermediário)
+   decide como persistir. A UI não deve conhecer detalhes do motor de execução.
+3. **Sem Next.js** — o lugar correto seria um serviço Python/Node.js dedicado chamando
+   `client.runs.create(durability=...)`. Com Next.js, o Route Handler **é** esse serviço.
+
+**Por que nginx puro não resolve:**
+nginx sem módulo Lua/NJS não consegue modificar o corpo JSON de requests POST. A única
+opção não-BFF seria o próprio servidor LangGraph ler um env var de default — mas o código
+mostra que ele não faz isso.
+
+**Solução implementada — BFF Next.js Route Handler:**
+
+```typescript
+// agent-ui-pro/src/app/api/[..._path]/route.ts
+// Node.js server-side — NÃO executado no browser
+initApiPassthrough({
+  apiUrl: process.env.LANGGRAPH_API_URL,         // env var server-side
+  headers: () => ({ "X-Api-Key": process.env.LANGGRAPH_AUTH_TOKEN }),
+  bodyParameters: (req, body) => {
+    if (req.method === "POST" && req.url.includes("/runs")) {
+      return { ...body, durability: "exit" };    // injetado aqui
+    }
+    return body;
+  },
+  baseRoute: "api",
+  runtime: "nodejs",
+});
+```
+
+O browser chama `http://localhost:8080/api/threads/:id/runs/stream`. nginx roteia `/api/...`
+para o Next.js. O Route Handler adiciona `durability: "exit"` e encaminha para
+`http://langgraph-server:8123`. O `LANGGRAPH_AUTH_TOKEN` nunca vai ao browser.
+
+**Regra consolidada**: se o parâmetro é lido via `payload.get(...)` no servidor LangGraph,
+ele só pode ser definido pelo código que cria o run — seja um serviço Python, um BFF Node.js,
+ou outro intermediário. UI puro nunca é o lugar correto.
+
+---
+
+### 2. Por que `exit` e não `async` (o padrão)
+
+Os três modos de durabilidade e o que cada um faz:
+
+| Modo | Quando checkpointa | I/O por turno | Recovery em crash |
+|---|---|---|---|
+| `sync` | Antes de cada nó, **bloqueante** | ~6 writes síncronos | ✅ Total — recupera do nó exato |
+| `async` *(padrão)* | Após cada nó, **não-bloqueante** | ~6 writes assíncronos | ⚠️ Quase total — pode perder último nó |
+| `exit` | Apenas ao final do run | **1 write** | ❌ Zero mid-run — turn inteiro se perde |
+
+**Por que não `async`:**
+- `async` ainda produz ~6 writes por turno (igual ao `sync` em quantidade)
+- A única diferença é que o write não bloqueia o próximo nó — o ganho de latência é
+  pequeno (o Postgres processa os writes em paralelo, mas ainda consome I/O e conexões)
+- Para o Neon free tier (50–200ms/write), `async` = 6 writes × overhead = mesma espera
+  total, só distribuída diferente na timeline
+- O `exit` é a única opção que reduz o **número** de writes: 6 → 1 (−83%)
+
+**Trade-off escolhido (`exit`):**
+
+| | `async` | `exit` |
+|---|---|---|
+| Writes/turno | ~6 | **1** |
+| Latência checkpoint | Distribuída entre nós | Concentrada no final |
+| Recovery em crash | Recupera do último nó | ❌ Perde o turno inteiro |
+| Risco de side effect | Baixo | **Existe** (ver seção 3) |
+
+Para o AgendAI — chat conversacional onde cada turno é independente — perder um turno
+inteiro em crash é aceitável: o usuário simplesmente retenta a mensagem.
+
+---
+
+### 3. O problema de email duplicado com `exit` — e a solução
+
+**Cenário de risco:**
+
+```
+Turno N-1: criar_agendamento → estado: {email_pending: True, email_payload: {...}}
+           ↓ checkpoint escrito (exit do turno N-1)
+
+Turno N:   LLM confirma → send_email executa → email enviado
+           estado em memória: {email_pending: False, email_payload: None}
+           ↓ CRASH DO PROCESSO antes do exit checkpoint
+           ↓ checkpoint do turno N NUNCA é escrito
+
+Retry do usuário (ou auto-retry):
+           Thread carrega último checkpoint = turno N-1 = {email_pending: True}
+           → send_email executa novamente → EMAIL DUPLICADO ✉️✉️
+```
+
+**Por que o `tenacity` no `email_sender.py` não ajuda aqui:**
+O `tenacity` (3x retry, backoff exponencial) protege contra falhas de SMTP — o servidor
+de e-mail fica fora do ar, timeout de rede, etc. Ele **não** protege contra o LangGraph
+reexecutar o nó por causa de um run reiniciado.
+
+**Com `async` o risco seria menor:**
+Com `async`, após o nó `send_email` completar, um write assíncrono captura
+`{email_pending: False}`. Se o processo cai depois desse write, o retry carrega o estado
+correto e não envia o email novamente. A janela de vulnerabilidade é só o intervalo entre
+o nó completar e o write assíncrono finalizar — muito menor que com `exit`.
+
+**Soluções possíveis:**
+
+**Opção A — Idempotência por `agendamento_id` (recomendada, não implementada):**
+Antes de enviar, verificar se já existe um e-mail registrado para esse `agendamento_id`
+em banco de dados. O custo de implementação é médio (nova tabela `emails_enviados`), mas
+elimina o risco completamente.
+
+```python
+# pseudocódigo em email_sender.py
+async def send_email(state):
+    payload = state.get("email_payload")
+    if not payload:
+        return {"email_pending": False}
+    
+    agendamento_id = payload.get("agendamento_id")
+    if agendamento_id and await email_already_sent(agendamento_id):
+        return {"email_pending": False}  # idempotente: não envia de novo
+    
+    await _send_smtp(...)
+    await mark_email_sent(agendamento_id)  # registra no DB
+    return {"email_pending": False}
+```
+
+**Opção B — Aceitar o risco (decisão atual):**
+- Crash entre `send_email` e run exit é um evento raro (requer crash de processo, não
+  só falha de SMTP)
+- A janela de vulnerabilidade é o tempo do último nó (`synthesize_tts`) + overhead do
+  exit checkpoint (~200ms no Neon)
+- Para um sistema médico MVP, email duplicado é incomum e o impacto é baixo (paciente
+  recebe 2 confirmações — não é fatal)
+- Se o risco for inaceitável em produção, trocar para `async` sem mudar código do agente
+
+**Decisão atual**: aceitar o risco (Opção B) com registro desta lição como TODO para
+Opção A quando o sistema entrar em produção real.
+
+---
+
+### 4. `DeltaChannel` — otimização de tamanho de checkpoint (deferida)
+
+`DeltaChannel` e `durability: "exit"` são complementares mas independentes:
+
+| Técnica | O que reduz | Mecanismo |
+|---|---|---|
+| `durability: "exit"` | **Frequência** de writes | 6 writes/turno → 1 write/turno |
+| `DeltaChannel` | **Tamanho** de cada write | Armazena deltas, não estado completo |
+
+**O problema que `DeltaChannel` resolve:**
+O canal `messages` em `AgendAIState` usa `add_messages` (append-only). Sem `DeltaChannel`,
+cada checkpoint armazena a lista **completa** de mensagens. Com 20 turnos de conversa,
+o checkpoint do turno 20 armazena todas as 40+ mensagens anteriores — crescimento O(n²)
+em armazenamento total ao longo da conversa.
+
+Com `DeltaChannel`, o checkpoint armazena apenas os **deltas** (mensagens novas daquele
+turno). O LangGraph reconstrói o estado completo fazendo replay dos deltas. Crescimento
+linear em vez de quadrático.
+
+**Implementação seria uma linha em `state.py`:**
+
+```python
+from langgraph.channels.delta import DeltaChannel
+
+class AgendAIState(TypedDict):
+    messages: Annotated[list[AnyMessage], DeltaChannel(add_messages)]  # era só add_messages
+```
+
+**Por que foi deferido:**
+`DeltaChannel` está marcado como **beta** no LangGraph 1.2.0:
+
+> *"Beta. The API and on-disk representation may change in future releases. Threads written
+> with DeltaChannel today are expected to remain readable, but the surrounding contract
+> is not yet stable."*
+
+Riscos específicos para o managed LangGraph Server:
+1. O servidor desserializa/reserializa o estado — se o formato `_DeltaSnapshot` mudar
+   entre versões da imagem, threads antigas ficam ilegíveis
+2. O contrato de `BaseCheckpointSaver.get_delta_channel_history` ainda não é estável
+3. Não há garantia de compatibilidade forward com a imagem `langgraph/langgraph-server`
+
+**Critério de ativação**: implementar quando `DeltaChannel` sair de beta (provavelmente
+LangGraph 2.x) ou quando conversas longas (>20 turnos) forem o caso de uso dominante.
+Para o AgendAI atual (consultas pontuais, 3–8 turnos por agendamento), o `exit` já resolve
+o overhead crítico sem expor risco de instabilidade.
+
+---
+
 ## Referências
 
 - [ADR-025 — Estratégia de Checkpoint LangGraph](../adr/ADR-025-langgraph-checkpoint-strategy.md)
