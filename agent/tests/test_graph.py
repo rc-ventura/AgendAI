@@ -19,6 +19,16 @@ def make_state(**kwargs) -> AgendAIState:
     return base
 
 
+def test_system_prompt_directs_parallel_lookup():
+    """B2 (QW-4): Prompt must instruct simultaneous buscar_horarios + buscar_paciente
+    in round 1 to drive the scheduling flow down to ≤2 LLM rounds."""
+    from agent.nodes.llm_core import SYSTEM_PROMPT
+    lower = SYSTEM_PROMPT.lower()
+    assert "simultane" in lower or "ao mesmo tempo" in lower, (
+        "SYSTEM_PROMPT must instruct simultaneous tool lookups in round 1 (QW-4 B2)"
+    )
+
+
 @pytest.mark.asyncio
 async def test_text_query_reaches_llm(mock_api_client):
     """US1: text message flows through detect_input_type → chat_with_llm"""

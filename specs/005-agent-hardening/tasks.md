@@ -67,8 +67,8 @@ Polyglot: agent at `agent/agent/`, agent tests `agent/tests/`, API at `api/src/`
 
 ### Batch B2 — Reduce LLM rounds (QW-4)
 
-- [ ] T011 [P] [US2] Failing-first test in `agent/tests/test_graph.py`: a standard scheduling request resolves in ≤2 LLM rounds (count AIMessage tool-call cycles)
-- [ ] T012 [US2] Tighten the system prompt in `agent/agent/nodes/llm_core.py` to cut rounds 4→2 without weakening identity/PII/email-gate rules
+- [x] T011 [P] [US2] Failing-first test in `agent/tests/test_graph.py`: a standard scheduling request resolves in ≤2 LLM rounds (count AIMessage tool-call cycles)
+- [x] T012 [US2] Tighten the system prompt in `agent/agent/nodes/llm_core.py` to cut rounds 4→2 without weakening identity/PII/email-gate rules
 - [ ] T013 [US2] Validate rounds + correctness (email gate, pt-BR) vs baseline; update `ADR-027` + learning-lesson; **manual gate → commit on approval**
 
 ### Batch B3 — Checkpoint exit/selective (QW-3) — *gated by T005/R2*

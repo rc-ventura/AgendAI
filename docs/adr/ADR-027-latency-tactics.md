@@ -34,9 +34,26 @@ llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2).bind_tools(
 
 **Note**: `gpt-4o-mini` supports parallel function calling by default since late 2024. The flag makes the behavior explicit and survives future SDK/model upgrades that might change the default.
 
-### B2 — Round reduction (to be completed)
+### B2 — Round reduction via system prompt (implemented)
 
-System prompt optimisation will be documented in this ADR after B2's manual gate.
+```python
+# agent/agent/nodes/llm_core.py — rule 6 added to SYSTEM_PROMPT
+"""
+6. Minimize rounds de LLM (alvo: ≤2 por fluxo completo):
+   - Se o e-mail do paciente já estiver na conversa, chame buscar_horarios_disponiveis e
+     buscar_paciente SIMULTANEAMENTE na mesma chamada de ferramenta (round 1).
+   - Após o paciente confirmar o horário desejado, chame criar_agendamento IMEDIATAMENTE
+     sem pedir re-confirmação adicional.
+"""
+```
+
+Two behavioural constraints added to the existing prompt without removing any identity-hardening or business rules:
+
+1. **Parallel first-round lookups**: when the patient's email is already present (common for returning patients who open with "quero agendar, meu e-mail é X"), the LLM is directed to call `buscar_horarios_disponiveis` + `buscar_paciente` simultaneously. Combined with `parallel_tool_calls=True` (B1), both tools resolve concurrently and the LLM gets both results in one round-trip.
+
+2. **Immediate booking after confirmation**: the previous prompt said "confirme com o paciente" which the LLM interpreted as a separate explicit confirmation step. The new rule eliminates that extra round: once the patient says "quero o horário X", the LLM calls `criar_agendamento` directly.
+
+**Expected round reduction**: 4 → ≤2 for a full scheduling flow where the patient provides the email upfront. For flows where the email is requested in a separate step, the count is 3 (one extra round to ask for the email is unavoidable). Identity/PII/email-gate rules remain intact.
 
 ---
 

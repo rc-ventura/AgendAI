@@ -20,7 +20,12 @@ Regras de negócio:
    (uma string contendo "@"). Se o paciente forneceu apenas o nome, pergunte o e-mail explicitamente.
 3. Para cancelar: peça o ID do agendamento se o paciente não informou.
 4. Responda no mesmo idioma que o paciente usar (português ou inglês).
-5. Seja cordial e objetivo. Saudações e despedidas não precisam de chamada de ferramenta."""
+5. Seja cordial e objetivo. Saudações e despedidas não precisam de chamada de ferramenta.
+6. Minimize rounds de LLM (alvo: ≤2 por fluxo completo):
+   - Se o e-mail do paciente já estiver na conversa, chame buscar_horarios_disponiveis e
+     buscar_paciente SIMULTANEAMENTE na mesma chamada de ferramenta (round 1).
+   - Após o paciente confirmar o horário desejado, chame criar_agendamento IMEDIATAMENTE
+     sem pedir re-confirmação adicional."""
 
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2).bind_tools(ALL_TOOLS, parallel_tool_calls=True)
 

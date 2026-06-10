@@ -124,3 +124,27 @@ o flag garante que o modelo as emita em um único AIMessage ao invés de em AIMe
 **Lição de processo**: para qualquer flag de configuração de chamada LLM/tool, preferir ser
 explícito no `bind_tools` (ou no objeto `ChatOpenAI` passado ao `create_agent`) ao invés de
 depender do default do SDK, que pode mudar entre versões.
+
+---
+
+## B2 — Redução de rounds via system prompt — implementado 2026-06-10
+
+**Tática**: adicionar regra 6 ao `SYSTEM_PROMPT` em `llm_core.py` com instruções explícitas de:
+1. Lookups simultâneos no round 1 (`buscar_horarios` + `buscar_paciente` em paralelo quando o e-mail está disponível)
+2. `criar_agendamento` imediato após confirmação do paciente (sem round de re-confirmação)
+
+**Problema original**: o prompt dizia "confirme com o paciente" antes de agendar — o LLM
+interpretava isso como um turno extra de confirmação, gerando 4 rounds num fluxo típico.
+Sem instrução explícita de chamadas paralelas, também separava buscar_horarios e buscar_paciente
+em rounds distintos.
+
+**Solução**: instrução direta no prompt. LLMs de instrução seguem regras numeradas de forma
+confiável quando são explícitas e não conflitam com outras regras.
+
+**Lição de processo**: regras de negócio do sistema prompt têm **custo de latência**.
+Cada round extra = ~600–900 ms (2× RTT LLM em P50). Revisitar o prompt após mudanças de
+arquitetura é tão importante quanto otimizar código. Testar com `test_system_prompt_directs_parallel_lookup`
+(verifica presença da instrução) + simulação de fluxo 2-round em `test_graph.py`.
+
+**Validação**: `test_system_prompt_directs_parallel_lookup` (T011) + 64 pytest verdes.
+Live delta TBD (requer sistema em execução).
