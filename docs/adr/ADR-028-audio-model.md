@@ -1,4 +1,4 @@
-# ADR-028: Modelo de Áudio — Groq Whisper vs gpt-4o-audio-preview
+# ADR-028: Modelo de Áudio — gpt-4o-audio-preview (REST, sem nova infra)
 
 **Status**: Accepted  
 **Data**: 2026-06-10  
@@ -9,105 +9,89 @@
 
 ## Contexto
 
-O fluxo de áudio atual do AgendAI usa três chamadas de API separadas:
+O fluxo de áudio atual usa `whisper-1` via `openai.audio.transcriptions.create` —
+uma chamada REST separada antes do LLM processar a mensagem.
 
 ```
 audio_bytes
-    → transcribe_audio (OpenAI whisper-1)      ~1.5–2.0s  ← gargalo
-    → chat_with_llm (gpt-4o-mini, 2 rounds)    ~1.0–2.0s  (otimizado em B1+B2)
-    → synthesize_tts (OpenAI tts-1)            ~0.5–1.0s
-    ─────────────────────────────────────────────────────
-    Total fluxo de voz:                         ~3.0–5.0s  (com B1+B2)
+    → transcribe_audio (whisper-1)          ~1.5–2.0s  ← gargalo
+    → chat_with_llm (gpt-4o-mini, 2 rounds) ~1.0–2.0s  (otimizado em B1+B2)
+    → synthesize_tts (tts-1)                ~0.5–1.0s
+    ─────────────────────────────────────────────────
+    Total fluxo de voz:                      ~3.0–5.0s  (com B1+B2)
 ```
 
-SC-007 exige ≥50% de redução em relação ao baseline pré-B1/B2 (~4–7s total).
+Três caminhos avaliados no spike:
 
-A investigação R8 identificou três caminhos:
-
-| Caminho | Transporte | Elimina nós | Esforço |
-|---------|-----------|-------------|---------|
-| **(a) Groq Whisper** | REST | nenhum | 5 linhas |
-| **(b) gpt-4o-audio-preview** | REST (sem WebSocket) | `transcriber.py` + `tts.py` | médio — reestrutura fluxo LLM |
-| **(c) GPT-4o Realtime** | WebSocket | transcribe + TTS | alto — troca harness SSE |
+| Caminho | Infra adicional | Elimina nós | Esforço |
+|---------|----------------|-------------|---------|
+| **(a) Groq Whisper** | `GROQ_API_KEY` + `groq>=0.8` | nenhum | 5 linhas |
+| **(b) `gpt-4o-audio-preview`** | nenhuma — mesma `OPENAI_API_KEY` | nenhum (mantém arquitetura) | ~10 linhas |
+| **(c) GPT-4o Realtime** | WebSocket | transcriber + TTS | alto — troca harness SSE |
 
 ---
 
-## Opção A — Groq Whisper drop-in (escolhida)
+## Decisão: Opção B — `gpt-4o-audio-preview` via Chat Completions REST
 
-**Modelo**: `whisper-large-v3-turbo`
+**Princípio**: não adicionar nova infra (chave de API + SDK) para otimizações de desempenho
+enquanto a escala não justifica. O mesmo `OPENAI_API_KEY` já em uso serve para STT multimodal.
 
-Groq hospeda o Whisper da OpenAI em hardware próprio (LPU). A API é idêntica à OpenAI:
-`client.audio.transcriptions.create(model="whisper-large-v3-turbo", file=file)`.
+### Implementação
 
-### Benchmark (publicado por Groq/comunidade, junho 2025)
-
-| Provider | Modelo | Latência STT (áudio 30s) | pt-BR |
-|---|---|---|---|
-| OpenAI | `whisper-1` | ~1.5–2.0s | ✅ boa |
-| Groq | `whisper-large-v3-turbo` | ~0.2–0.4s | ✅ boa |
-| Groq | `whisper-large-v3` | ~0.5–0.8s | ✅ melhor precisão |
-
-**Economia**: ~1.2–1.7s no passo de STT — o maior item individual no fluxo de áudio.
-
-### Impacto no SC-007
-
-Com B1 (parallel tools) + B2 (prompt eng.) + B5(a) (Groq Whisper):
-
+```python
+# agent/agent/nodes/transcriber.py
+response = await openai_client.chat.completions.create(
+    model="gpt-4o-audio-preview",
+    modalities=["text"],
+    messages=[{
+        "role": "user",
+        "content": [{
+            "type": "input_audio",
+            "input_audio": {
+                "data": base64.b64encode(audio_bytes).decode(),
+                "format": "mp3",
+            },
+        }],
+    }],
+)
+text = response.choices[0].message.content
 ```
-Antes (baseline):   ~4–7s total
-Depois B1+B2+B5(a): ~1.3–3.3s total  →  ≈50–67% redução
-```
 
-SC-007 (≥50%) alcançável com B5(a) somado às otimizações de B1+B2.
+A arquitetura do grafo não muda — `transcribe_audio` continua como nó separado,
+retornando `HumanMessage(content=text)` como antes.
 
-### Trade-offs
+### Trade-offs aceitos
 
 | Aspecto | Valor |
 |---|---|
-| Mudança de código | `transcriber.py` — 4 linhas |
-| Nova dependência | `groq>=0.8` |
-| Nova env var | `GROQ_API_KEY` |
-| Risco | Baixo — mesma API, provider diferente |
-| Custo | $0.111/hora de áudio (vs OpenAI: $0.006/min = $0.36/hora) |
-| Fallback | Revertível para `whisper-1` trocando provider |
-
-### Modelo escolhido: `whisper-large-v3-turbo`
-
-`whisper-large-v3-turbo` é uma versão destilada com latência 2x menor vs `whisper-large-v3`
-e qualidade suficiente para conversas médicas em pt-BR. Se qualidade de transcrição for
-problema em produção, trocar para `whisper-large-v3` (1 linha de mudança).
+| Nova infra | Nenhuma — `OPENAI_API_KEY` existente |
+| Nova dependência | Nenhuma — `openai` já está em `pyproject.toml` |
+| Mudança de código | `transcriber.py` — ~10 linhas |
+| Latência STT | Maior que Groq (~0.8–1.5s vs ~0.2–0.4s do Groq) |
+| Qualidade pt-BR | ✅ Superior ao whisper-1 (modelo maior, contexto de conversação) |
+| Custo | Tokens de áudio (~$0.003/s áudio) — ligeiramente maior que whisper-1 |
 
 ---
 
-## Opção B — `gpt-4o-audio-preview` multimodal (deferida)
+## Opção A — Groq Whisper (documentada, não implementada)
 
-**Por que não agora:**
+**Quando considerar**: se a latência de STT se tornar gargalo dominante após outras
+otimizações e o projeto já tiver `GROQ_API_KEY` por outro motivo.
 
-O fluxo com `gpt-4o-audio-preview` não é tão simples quanto "1 chamada":
+```python
+# Implementação futura — substituir transcriber.py
+from groq import AsyncGroq
+groq_client = AsyncGroq()  # requer GROQ_API_KEY
 
+transcript = await groq_client.audio.transcriptions.create(
+    model="whisper-large-v3-turbo",  # ~0.2–0.4s; ou whisper-large-v3 para mais precisão
+    file=audio_file,
+)
 ```
-1. Primeira chamada: áudio in → transcrição implícita → tool calls (rodadas de texto)
-2. N rodadas de text in/out (tool calling — igual ao fluxo atual)
-3. Chamada final: text in + modality=audio → áudio out (substitui tts-1)
-```
 
-A simplificação real é: (1) sem chamada separada ao Whisper, (3) sem chamada separada ao TTS.
-Mas o meio (rodadas de tool calling) continua igual.
-
-**O que muda na arquitetura:**
-- `transcriber.py` é removido — o primeiro `llm_core.py` recebe `input_audio` content part
-- `detect_input_type` ainda decide o fluxo, mas não há nó de transcrição separado
-- `synthesize_tts` é removido — a última chamada ao LLM pede `modalities: ["text", "audio"]`
-- `llm_core.py` precisa de dois modos: text-only e audio-aware (estado `input_type`)
-
-**Custo**: ~$0.06/min áudio in, ~$0.24/min áudio out — significativamente maior que Groq.
-
-**Quando ativar:**
-- Qualidade de voz for requisito crítico (voz nativa do GPT-4o é superior ao tts-1)
-- Budget de API justificar o custo maior
-- Quisermos eliminar a dependência do Groq
-
-**Outcome → deferido para sprint de qualidade, não de latência.**
+**Latência**: `whisper-large-v3-turbo` ~0.2–0.4s vs `gpt-4o-audio-preview` ~0.8–1.5s.
+**Custo**: $0.111/hora de áudio — mais barato que `gpt-4o-audio-preview` em volume.
+**Requisito**: `groq>=0.8` em `pyproject.toml` + `GROQ_API_KEY` em `.env`.
 
 ---
 
@@ -117,44 +101,40 @@ Exige substituir o harness SSE por WebSocket. Fora de escopo para spec 005.
 
 ---
 
-## Decisão
+## Impacto no SC-007
 
-**Implementar Opção A: Groq Whisper (`whisper-large-v3-turbo`).**
+Com B1 (parallel tools) + B2 (prompt eng.) + B5(b) (`gpt-4o-audio-preview`):
 
-Mudança cirúrgica em `agent/agent/nodes/transcriber.py`. Zero impacto no grafo ou no fluxo de texto. Ganho imediato de ~1.2–1.7s no passo dominante do fluxo de voz.
-
-```python
-# agent/agent/nodes/transcriber.py — depois da mudança
-from groq import AsyncGroq
-
-groq_client = AsyncGroq()  # lê GROQ_API_KEY do ambiente
-
-transcript = await groq_client.audio.transcriptions.create(
-    model="whisper-large-v3-turbo",
-    file=audio_file,
-)
 ```
+Baseline (pré-B1/B2):     ~4–7s
+Após B1+B2:               ~3.0–5.0s
+Após B1+B2+B5(b):         ~2.0–4.0s   →  ~30–50% redução
+```
+
+SC-007 (≥50%) é alcançável na faixa favorável. Validação live necessária (T023).
+Se SC-007 não for atingido, Groq (Opção A) é o próximo passo natural — 1 linha de mudança.
 
 ---
 
 ## Consequências
 
 ### Aceitas agora
-- Nova env var `GROQ_API_KEY` necessária para fluxo de voz.
-- Fallback manual: reverter para `whisper-1` trocando `groq_client` por `openai_client` e o model string.
-- Latência de STT reduzida de ~1.5–2s para ~0.2–0.4s.
+- `gpt-4o-audio-preview` ainda carrega o label "preview" — comportamento estável
+  desde outubro 2024, sem breaking changes conhecidos.
+- Latência de STT não é tão baixa quanto o Groq — aceitável enquanto B1+B2 são
+  as principais fontes de ganho.
 
 ### Condições que ativam revisão
-1. Qualidade de transcrição pt-BR insatisfatória em produção → trocar para `whisper-large-v3`.
-2. Budget de API justificar → avaliar Opção B (`gpt-4o-audio-preview`).
-3. Requisito de voz nativa de alta qualidade → Opção B.
+1. SC-007 não atingido em medição live → implementar Groq Whisper (Opção A).
+2. `GROQ_API_KEY` já disponível no projeto por outro motivo → migração trivial.
+3. Requisito de qualidade de voz nativa → Opção C (Realtime).
 
 ---
 
 ## Referências
 
-- [Groq Audio API](https://console.groq.com/docs/speech-text) — modelos whisper disponíveis e latências
-- [gpt-4o-audio-preview](https://platform.openai.com/docs/guides/audio) — REST sem WebSocket, base64 in/out
+- [gpt-4o-audio-preview — OpenAI Docs](https://platform.openai.com/docs/guides/audio)
+- [Groq Audio API](https://console.groq.com/docs/speech-text)
 - [Research R8](../../specs/005-agent-hardening/research.md#r8) — análise dos três caminhos
 - [ADR-027](./ADR-027-latency-tactics.md) — parallel tool calls + round reduction (B1/B2)
 - [Learning lesson áudio](../learning-lessons/modelos_audio_multimodal_litellm.md)

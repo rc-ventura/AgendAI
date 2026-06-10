@@ -173,10 +173,13 @@ async def test_transcriber_adds_human_message():
 
     state = make_state(audio_data=b"fake_audio_bytes", input_type="audio")
 
-    with patch("agent.nodes.transcriber.groq_client") as mock_client:
-        mock_client.audio.transcriptions.create = AsyncMock(
-            return_value=MagicMock(text="Quais horários disponíveis?")
-        )
+    mock_choice = MagicMock()
+    mock_choice.message.content = "Quais horários disponíveis?"
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+
+    with patch("agent.nodes.transcriber.openai_client") as mock_client:
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
         result = await transcribe_audio(state)
 
     assert len(result["messages"]) == 1
@@ -250,8 +253,8 @@ async def test_transcriber_raises_on_corrupted_audio():
 
     state = make_state(audio_data=b"\x00\x01\x02corrupted", input_type="audio")
 
-    with patch("agent.nodes.transcriber.groq_client") as mock_client:
-        mock_client.audio.transcriptions.create = AsyncMock(
+    with patch("agent.nodes.transcriber.openai_client") as mock_client:
+        mock_client.chat.completions.create = AsyncMock(
             side_effect=Exception("Audio file could not be decoded")
         )
         with pytest.raises(Exception, match="Audio file could not be decoded"):

@@ -49,28 +49,24 @@ def test_bff_route_handler_sets_durability_exit():
         )
 
 
-def test_transcriber_uses_groq_not_openai():
-    """B5 (ADR-028): transcriber must use Groq client (whisper-large-v3-turbo),
-    not the OpenAI client (whisper-1). SC-007: ≥50% audio latency reduction."""
-    import agent.nodes.transcriber as t
-    from groq import AsyncGroq
-
-    assert isinstance(t.groq_client, AsyncGroq), (
-        "transcriber must use AsyncGroq client (ADR-028 B5)"
-    )
-    assert not hasattr(t, "openai_client"), (
-        "transcriber must not keep openai_client after B5 migration"
-    )
-
-
-def test_transcriber_uses_fast_model():
-    """B5: must use whisper-large-v3-turbo (fastest Groq Whisper, ~0.2-0.4s)."""
+def test_transcriber_uses_audio_preview_model():
+    """B5 (ADR-028): transcriber must use gpt-4o-audio-preview via chat.completions,
+    not whisper-1 via audio.transcriptions. No new infra — same OPENAI_API_KEY."""
     import inspect
     import agent.nodes.transcriber as t
 
     source = inspect.getsource(t)
-    assert "whisper-large-v3-turbo" in source, (
-        "transcriber must specify whisper-large-v3-turbo model (ADR-028)"
+    assert "gpt-4o-audio-preview" in source, (
+        "transcriber must use gpt-4o-audio-preview (ADR-028 B5)"
+    )
+    assert "chat.completions" in source, (
+        "transcriber must use chat.completions API, not audio.transcriptions"
+    )
+    assert "whisper-1" not in source, (
+        "transcriber must not use whisper-1 after B5 migration"
+    )
+    assert "input_audio" in source, (
+        "transcriber must send audio via input_audio content part"
     )
 
 
@@ -142,12 +138,14 @@ async def test_audio_path_calls_transcriber_and_tts():
     fake_audio_out = b"MP3_OUTPUT"
 
     with patch("agent.nodes.llm_core.llm") as mock_llm, \
-         patch("agent.nodes.transcriber.groq_client") as mock_stt, \
+         patch("agent.nodes.transcriber.openai_client") as mock_stt, \
          patch("agent.nodes.tts.openai_client") as mock_tts_client:
 
         mock_llm.ainvoke = AsyncMock(return_value=mock_ai_response)
-        mock_stt.audio.transcriptions.create = AsyncMock(
-            return_value=MagicMock(text="Quais horários disponíveis?")
+        mock_choice = MagicMock()
+        mock_choice.message.content = "Quais horários disponíveis?"
+        mock_stt.chat.completions.create = AsyncMock(
+            return_value=MagicMock(choices=[mock_choice])
         )
         mock_response = MagicMock()
         mock_response.read = MagicMock(return_value=fake_audio_out)
