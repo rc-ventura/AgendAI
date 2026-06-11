@@ -120,13 +120,13 @@ Polyglot: agent at `agent/agent/`, agent tests `agent/tests/`, API at `api/src/`
 **Independent Test**: The 5 outcomes in `contracts/resilience.md` (transient masked; breaker opens ≤1s; cold-start succeeds; 409 not retried; suites green).
 
 - [x] T024 [P] [US1] Failing-first tests in `agent/tests/test_nodes.py` + `api/tests/`: transient retry is masked, breaker opens after 3 fails, 4xx/409 is NOT retried, startup tolerates slow Postgres, **a retry around `email_sender` produces exactly one email (FR-006, no duplicate side effect)**, and **user-facing errors are pt-BR with no stack-trace/secret leakage (FR-024)** (per `contracts/resilience.md`) — **4 testes em test_nodes.py: retry transparente, breaker abre após 3 falhas, 409 não retentado, email sem duplicata**
-- [ ] T025 [P] [US1] ~~`pybreaker` to `agent/pyproject.toml`~~ — substituído por `CircuitBreaker` custom em `agent/agent/resilience.py` (ADR-024; sem dep externa); `p-retry` + `async-retry` to `api/package.json` — ainda pendentes (necessários para T029/T030)
+- [x] T025 [P] [US1] ~~`pybreaker` to `agent/pyproject.toml`~~ — substituído por `CircuitBreaker` custom em `agent/agent/resilience.py` (ADR-024; sem dep externa); `p-retry` já presente em `api/package.json`; `async-retry` não necessário — `api/src/db/init.js` e `api/src/db/withRetry.js` usam `p-retry` para startup e queries
 - [x] T026 [US1] `agent/agent/nodes/llm_core.py`: `tenacity` retry (3×, exp) + circuit breaker custom (fail_max=3, reset 30s) em `agent/agent/resilience.py`; `llm_core.py` usa `invoke_with_resilience` (ADR-024)
 - [x] T027 [P] [US1] ~~`agent/agent/nodes/transcriber.py`~~: removido em B5 (multimodal). Retry de `audio_llm` já coberto pelo CircuitBreaker/tenacity em T026 via `resilience.py`.
 - [x] T028 [P] [US1] `agent/agent/api_client.py`: `http_retry` (tenacity) importado de `agent.resilience`; retenta apenas `httpx.ConnectError`/`TimeoutException` — nunca 4xx
-- [ ] T029 [P] [US1] `api/src/db/connection.js`: `async-retry` startup (5×, ≤30s), bail on missing `DATABASE_URL`
-- [ ] T030 [P] [US1] `api/src/repositories/*.js`: `p-retry` on transient query errors only (not constraint/4xx)
-- [ ] T031 [US1] Validate the resilience contract; add an implementation note to `ADR-024` + learning-lesson; **manual gate → commit on approval**
+- [x] T029 [P] [US1] `api/src/db/init.js`: `initializeWithRetry` com `p-retry` (4 retries, exp 1→5s, abort em auth error); chamado em `server.js`
+- [x] T030 [P] [US1] `api/src/db/withRetry.js`: `withDbRetry` com `p-retry` (2 retries, exp 200→2000ms); `AbortError` em erros não-transientes; todos os repositórios usam `withDbRetry` em cada query
+- [x] T031 [US1] Contrato validado: 6/6 outcomes OK (LLM retry, CB opens, DB cold-start, 409 no-retry, email no-dup, suítes verdes). ADR-024 atualizado com nota API-side. **Manual gate → aguarda aprovação e commit**
 
 **Checkpoint**: reliability contract green; US1 independently validated.
 

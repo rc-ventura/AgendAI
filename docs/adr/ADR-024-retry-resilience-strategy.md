@@ -1,6 +1,6 @@
 # ADR-024 — Estratégia de Retry e Resiliência (Agent + API)
 
-**Status:** Implementado (B6 — 2026-06-10) — aguarda commit manual
+**Status:** Implementado (B6 — 2026-06-10 · API-side B6 — 2026-06-11) — aguarda commit manual
 
 **Data:** 2026-06-03 | **Última atualização:** 2026-06-10
 
@@ -286,3 +286,38 @@ nas traces do agente quando `LANGSMITH_TRACING=true`.
 A implementação atual cobre apenas **hard failures** (1 de 5 categorias). O modelo completo
 adiciona estados DEGRADED e HALF-OPEN, health score com decay, e detecção de falhas semânticas.
 Ver `docs/learning-lessons/circuit_breaker_custom_vs_libs.md` para upgrade path detalhado.
+
+---
+
+## Notas de Implementação — API-side (2026-06-11)
+
+### `db/init.js` — startup retry
+
+`initializeWithRetry(pool, initSchema, seed)` usa `p-retry` (4 retries, exp 1→5s, factor 2).
+Abort imediato em erros de autenticação (`EAUTH` / "password"). Chamado em `server.js` antes
+de `app.listen`.
+
+### `db/withRetry.js` — query retry
+
+`withDbRetry(fn)` usa `p-retry` (2 retries, exp 200→2000ms). Retenta em
+`ECONNRESET`, `ECONNREFUSED`, `ETIMEDOUT`, `57P01`, `08006`, `08001` e mensagens
+"connection terminated/refused". `AbortError` em todos os outros erros — constraint violations
+(23xxx), auth, e erros de negócio não são retentados.
+
+Todos os métodos de `repositories/*.js` encapsulam `pool.query` em `withDbRetry`.
+
+### Desvio: async-retry → p-retry
+
+O plano original especificava `async-retry` para startup. `p-retry` já estava no `package.json`
+(adicionado na sessão B6 anterior) e oferece a mesma API com `AbortError` integrado. Sem nova dep.
+
+### Contrato de resiliência — outcomes validados
+
+| # | Outcome | Teste | Status |
+|---|---------|-------|--------|
+| 1 | Transient LLM error retried transparently | `test_llm_transient_error_is_retried_transparently` | ✅ |
+| 2 | 3 LLM failures → breaker opens → pt-BR msg | `test_llm_breaker_opens_after_3_failures_returns_ptbr_message` | ✅ |
+| 3 | DB cold-start retry → request succeeds | `resilience.test.js: retries a transient ECONNRESET` | ✅ |
+| 4 | 409 not retried | `test_api_client_does_not_retry_409` + `resilience.test.js: 409` | ✅ |
+| 5 | Email retry → exactly one email | `test_email_sender_no_duplicate_on_smtp_retry` | ✅ |
+| 6 | 66 pytest + 41 Jest green | CI gate | ✅ |
