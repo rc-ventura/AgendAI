@@ -1,6 +1,6 @@
 # ADR-025: Estratégia de Checkpoint do LangGraph em Produção
 
-**Status**: Proposed  
+**Status**: Implementado (B3 — 2026-06-10 · B4 — 2026-06-11)  
 **Data**: 2026-06-06  
 **Spec relacionada**: [005-agent-hardening](../../specs/005-agent-hardening/)  
 **Depende de**: [ADR-014](./ADR-014-checkpointer-inmem.md) (supersedido em produção), [ADR-013](./ADR-013-langgraph-dev-server.md)
@@ -254,6 +254,59 @@ Ressalva: se o processo do servidor morrer mid-run com `durability="exit"`, o es
 
 - `test_bff_route_handler_sets_durability_exit` em `agent/tests/test_graph.py` (T015) — 65 pytest verdes
 - Contagem de writes/turno TBD (requer sistema em execução)
+
+---
+
+## B4 — Redis cache para API (2026-06-11)
+
+### Decisão revisada
+
+O plano original de B4 era usar `graph.compile(cache=RedisCache(...))` com `CachePolicy` per-node
+para cachear `buscar_pagamentos` (write-stable) no LangGraph. Após análise, a decisão foi **pivotar
+para migrar o cache da API** de `node-cache` (in-memory) para **Redis compartilhado**.
+
+### Motivação
+
+| Problema | node-cache (antes) | Redis (depois) |
+|--|--|--|
+| Multi-réplica (cloud) | Cada container tem seu próprio cache | Cache compartilhado entre todas as réplicas |
+| Constitution III (stateless) | Estado no container — violação | Estado externo — conforme |
+| Observabilidade | Invisível — não aparece em nenhuma ferramenta | Visível via `redis-cli KEYS` |
+| Invalidação | Correta mas isolada por container | Correta e global |
+
+### Implementação
+
+- `api/src/cache/index.js` — reescrito com `ioredis` v5; operações async com graceful fallback
+  quando `REDIS_URI` ausente (tests rodam sem Redis; cache é no-op)
+- `api/src/services/horariosService.js` — `await cache.get/set`
+- `api/src/services/agendamentosService.js` — `await cache.delByPrefix` (2 call sites)
+- `docker-compose.yml` — `REDIS_URI=redis://redis:6379` na API service + `depends_on: redis`
+- `agent/pyproject.toml` — `redis[asyncio]>=5.0` adicionado
+- `agent/agent/graph.py` — `compile(cache=_build_cache())` como infraestrutura;
+  `_build_cache()` retorna `RedisCache(redis_client)` se `REDIS_URI` presente, `None` caso contrário
+
+### Scoping de cache (Constitution IV — nunca servir stale)
+
+`delByPrefix('horarios')` é chamado após `criarAgendamento` e `cancelarAgendamento` — pós-commit,
+antes do return. Disponibilidade nunca é servida stale.
+
+### LangGraph node cache — por que não aplicar CachePolicy
+
+`execute_tools` executa TODOS os tools (estáveis e dinâmicos) num único nó. `CachePolicy` cachearia
+o nó inteiro — incluindo `buscar_horarios` (dinâmico). Alternativas:
+1. Split do nó (`execute_stable_tools` / `execute_tools`) — adiciona complexidade sem ganho real
+   (buscar_pagamentos raramente chamado 2× na mesma sessão)
+2. `key_func` que retorna chave única para chamadas dinâmicas — desperdiça Redis com entries nunca acessados
+
+Decisão: `compile(cache=RedisCache(...))` wira a infraestrutura; nenhum nó usa `CachePolicy` neste
+batch. Futura adição de nó dedicado (buscar_medicos, dados estáticos) pode usar CachePolicy trivialmente.
+
+### Validação
+
+- `redis-cli KEYS "agendai:cache:*"` → `agendai:cache:horarios` após primeira request ✅
+- `delByPrefix` via SCAN confirmado: prefixo `horarios:` e `horarios` removidos ✅
+- 41 Jest + 66 pytest verdes ✅
+- `_build_cache()` retorna `None` sem `REDIS_URI` (graceful) ✅
 
 ---
 

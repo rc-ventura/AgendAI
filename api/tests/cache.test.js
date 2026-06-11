@@ -5,7 +5,7 @@ const cache = require('../src/cache');
 let pool;
 
 beforeEach(async () => {
-  cache.clear();
+  await cache.clear();
 });
 
 afterAll(async () => {
