@@ -1,11 +1,13 @@
 from typing import Literal
+
 from langgraph.graph import StateGraph, START, END
 from langchain_core.messages import AIMessage
 
+from agent.cache import build_cache
 from agent.state import AgendAIState
 from agent.nodes.input_detector import detect_input_type
 from agent.nodes.llm_core import chat_with_llm
-from agent.nodes.tools import tool_node, ALL_TOOLS
+from agent.nodes.tools import tool_node
 from agent.nodes.email_sender import send_email
 from agent.nodes.tool_result_processor import process_tool_results
 
@@ -38,4 +40,6 @@ builder.add_edge("execute_tools", "process_tool_results")
 builder.add_edge("process_tool_results", "chat_with_llm")
 builder.add_edge("send_email", END)
 
-graph = builder.compile()
+# B4 (ADR-025): Redis cache backend. Nodes opt-in via CachePolicy — none configured
+# yet (execute_tools mixes stable + dynamic tools; safe split deferred to a future batch).
+graph = builder.compile(cache=build_cache())

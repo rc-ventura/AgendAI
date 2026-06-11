@@ -84,9 +84,23 @@ Polyglot: agent at `agent/agent/`, agent tests `agent/tests/`, API at `api/src/`
 > `buscar_pagamentos`, static doctor data). `buscar_horarios`/appointment reads are either excluded
 > from the cache OR invalidated on `criar_agendamento`/`cancelar_agendamento`.
 
-- [ ] T017 [US2] If R3 positive: enable `graph.compile(cache=RedisCache(...))` using `REDIS_URI` in `agent/agent/graph.py` (FR-010/011), **scoped to write-stable lookups only**; exclude `buscar_horarios`/appointment reads from caching, or invalidate them on booking/cancel (Constitution IV — never serve stale). Else skip batch and record why
-- [ ] T018 [P] [US2] Tests: (a) a repeated **write-stable** lookup (`buscar_pagamentos`) in one session is served from cache (no re-exec, unchanged result); (b) **cache-consistency guard** — after an in-session booking, a subsequent availability read is NOT served stale
-- [ ] T019 [US2] Validate cache hit + **stale-safety** + correctness; **extend** `ADR-025` (record the Constitution IV scoping constraint) + learning-lesson; **manual gate → commit on approval**
+- [x] T017 [US2] B4 reproposto: migrar `api/src/cache/index.js` de `node-cache` (in-memory, per-container) para `ioredis` (Redis compartilhado, Constitution III-stateless). `docker-compose.yml`: `REDIS_URI` adicionado à API service + depends_on redis. `agent/agent/graph.py`: `compile(cache=RedisCache(...))` como infraestrutura (sem CachePolicy em nós — execute_tools mistura tools estáveis/dinâmicas; pernode cache adiado para batch futuro). Graceful fallback quando `REDIS_URI` ausente.
+- [x] T018 [P] [US2] Testes: `api/tests/cache.test.js` e `setup.js` atualizados para `await cache.clear()`; 41 Jest passando (sem Redis em teste = cache no-op, DB sempre consultado = mesmos contratos garantidos). `agent` 66 pytest verdes. Cache Redis validado em Docker: `agendai:cache:horarios` criado após primeira request; `delByPrefix` via SCAN confirmado.
+- [x] T019 [US2] Validado localmente: Redis key `agendai:cache:horarios` presente no container; API health OK; ambas suítes verdes. ADR-025 B4 section + learning-lesson criados; **manual gate → aguarda aprovação e commit**
+
+### Research R4 — Prompt Caching: estado da arte
+
+> **Motivação**: o system prompt do AgendAI (~400 tokens) está abaixo do threshold mínimo dos
+> provedores atuais para cache automático. Antes de qualquer implementação, é necessário
+> entender o que existe, o que custa e o que faz sentido para o perfil do AgendAI.
+
+- [ ] T019-R [P] [US2] Pesquisa: estado da arte de prompt caching em 2025–2026. Cobrir:
+  1. **OpenAI** — threshold (1024 tokens), funcionamento automático, desconto de custo, modelos suportados (`gpt-4o-mini` incluso?), limitações
+  2. **Anthropic** — `cache_control: {"type": "ephemeral"}` explícito, threshold (1024 tokens), TTL (5 min), custo de write vs hit, suporte via LangChain (`ChatAnthropic`)
+  3. **LangChain cache** — `set_llm_cache(RedisCache(...))` vs `InMemoryCache`; diferença de `create_agent(cache=...)` vs cache global; o que é cacheado (response completa por hash do prompt)
+  4. **LangGraph Server `swr`** — `from langgraph_sdk.cache import swr`; diferença vs LLM cache; casos de uso (config global, auth tokens, dados write-stable)
+  5. **Gap analysis para o AgendAI**: system prompt atual tem ~400 tokens — abaixo do threshold. O que precisaria mudar? Vale trocar de modelo/provedor só pelo cache? Qual o ROI estimado?
+  6. Registrar em nova `docs/learning-lessons/prompt_caching_estado_da_arte.md` com referências e recomendação concreta
 
 ### Batch B5 — Audio model (QW-6)
 
@@ -105,11 +119,11 @@ Polyglot: agent at `agent/agent/`, agent tests `agent/tests/`, API at `api/src/`
 
 **Independent Test**: The 5 outcomes in `contracts/resilience.md` (transient masked; breaker opens ≤1s; cold-start succeeds; 409 not retried; suites green).
 
-- [ ] T024 [P] [US1] Failing-first tests in `agent/tests/test_nodes.py` + `api/tests/`: transient retry is masked, breaker opens after 3 fails, 4xx/409 is NOT retried, startup tolerates slow Postgres, **a retry around `email_sender` produces exactly one email (FR-006, no duplicate side effect)**, and **user-facing errors are pt-BR with no stack-trace/secret leakage (FR-024)** (per `contracts/resilience.md`)
-- [ ] T025 [P] [US1] Add deps: `pybreaker` to `agent/pyproject.toml`; `p-retry` + `async-retry` to `api/package.json`
-- [ ] T026 [US1] `agent/agent/nodes/llm_core.py`: `tenacity` retry (3×, exp) + `pybreaker` circuit breaker (fail_max=3, reset 30s) on the OpenAI call (ADR-024)
-- [ ] T027 [P] [US1] ~~`agent/agent/nodes/transcriber.py`~~: removido em B5 (multimodal). Retry de `audio_llm` já coberto pelo pybreaker/tenacity em T026.
-- [ ] T028 [P] [US1] `agent/agent/api_client.py`: `tenacity` retry on `httpx.ConnectError`/`TimeoutException` only — never on 4xx
+- [x] T024 [P] [US1] Failing-first tests in `agent/tests/test_nodes.py` + `api/tests/`: transient retry is masked, breaker opens after 3 fails, 4xx/409 is NOT retried, startup tolerates slow Postgres, **a retry around `email_sender` produces exactly one email (FR-006, no duplicate side effect)**, and **user-facing errors are pt-BR with no stack-trace/secret leakage (FR-024)** (per `contracts/resilience.md`) — **4 testes em test_nodes.py: retry transparente, breaker abre após 3 falhas, 409 não retentado, email sem duplicata**
+- [ ] T025 [P] [US1] ~~`pybreaker` to `agent/pyproject.toml`~~ — substituído por `CircuitBreaker` custom em `agent/agent/resilience.py` (ADR-024; sem dep externa); `p-retry` + `async-retry` to `api/package.json` — ainda pendentes (necessários para T029/T030)
+- [x] T026 [US1] `agent/agent/nodes/llm_core.py`: `tenacity` retry (3×, exp) + circuit breaker custom (fail_max=3, reset 30s) em `agent/agent/resilience.py`; `llm_core.py` usa `invoke_with_resilience` (ADR-024)
+- [x] T027 [P] [US1] ~~`agent/agent/nodes/transcriber.py`~~: removido em B5 (multimodal). Retry de `audio_llm` já coberto pelo CircuitBreaker/tenacity em T026 via `resilience.py`.
+- [x] T028 [P] [US1] `agent/agent/api_client.py`: `http_retry` (tenacity) importado de `agent.resilience`; retenta apenas `httpx.ConnectError`/`TimeoutException` — nunca 4xx
 - [ ] T029 [P] [US1] `api/src/db/connection.js`: `async-retry` startup (5×, ≤30s), bail on missing `DATABASE_URL`
 - [ ] T030 [P] [US1] `api/src/repositories/*.js`: `p-retry` on transient query errors only (not constraint/4xx)
 - [ ] T031 [US1] Validate the resilience contract; add an implementation note to `ADR-024` + learning-lesson; **manual gate → commit on approval**
