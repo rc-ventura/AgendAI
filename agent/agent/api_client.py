@@ -1,5 +1,6 @@
 import os
 import httpx
+from agent.resilience import http_retry as _retry
 
 
 class ApiClient:
@@ -7,12 +8,14 @@ class ApiClient:
         self._base_url = base_url or os.environ.get("API_BASE_URL", "http://api:3000")
         self._client = httpx.AsyncClient(base_url=self._base_url, timeout=10.0)
 
+    @_retry
     async def buscar_horarios(self, data: str | None = None) -> list[dict]:
         params = {"data": data} if data else {}
         r = await self._client.get("/horarios/disponiveis", params=params)
         r.raise_for_status()
         return r.json()
 
+    @_retry
     async def criar_agendamento(self, paciente_email: str, horario_id: int) -> dict:
         r = await self._client.post(
             "/agendamentos",
@@ -21,11 +24,13 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
+    @_retry
     async def cancelar_agendamento(self, agendamento_id: int) -> dict:
         r = await self._client.patch(f"/agendamentos/{agendamento_id}/cancelar")
         r.raise_for_status()
         return r.json()
 
+    @_retry
     async def buscar_paciente(self, email: str) -> dict:
         r = await self._client.get(f"/pacientes/{email}")
         if r.status_code in (400, 404):
@@ -33,6 +38,7 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
+    @_retry
     async def listar_agendamentos_paciente(self, email: str, status: str | None = None) -> list[dict]:
         params = {"email": email}
         if status:
@@ -41,11 +47,13 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
+    @_retry
     async def buscar_agendamento(self, agendamento_id: int) -> dict:
         r = await self._client.get(f"/agendamentos/{agendamento_id}")
         r.raise_for_status()
         return r.json()
 
+    @_retry
     async def buscar_pagamentos(self) -> list[dict]:
         r = await self._client.get("/pagamentos")
         r.raise_for_status()

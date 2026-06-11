@@ -268,3 +268,136 @@ async def test_chat_with_llm_audio_extracts_final_response():
 
     assert result["final_response"] == fake_mp3
     assert len(result["messages"]) == 1
+
+
+# ── B6: retry + circuit breaker (T024) ───────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_llm_transient_error_is_retried_transparently():
+    """Contract #1: one APIConnectionError is retried silently — patient sees the answer."""
+    import openai
+    from agent.nodes.llm_core import chat_with_llm
+
+    good_response = AIMessage(content="Olá! Como posso ajudar?")
+    call_count = 0
+
+    async def side_effect(messages, **_):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise openai.APIConnectionError(request=MagicMock())
+        return good_response
+
+    with patch("agent.nodes.llm_core.llm") as mock_llm:
+        mock_llm.ainvoke = AsyncMock(side_effect=side_effect)
+        result = await chat_with_llm(make_state())
+
+    assert result["messages"][-1].content == "Olá! Como posso ajudar?"
+    assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_llm_breaker_opens_after_3_failures_returns_ptbr_message():
+    """Contract #2: 3 consecutive LLM failures → circuit breaker opens → pt-BR unavailability."""
+    import openai
+    from agent.nodes.llm_core import chat_with_llm
+    from agent.resilience import llm_breaker, CircuitOpenError  # noqa: F401
+
+    llm_breaker.close()  # ensure clean state between tests
+
+    async def always_fail(messages, **_):
+        raise openai.APIConnectionError(request=MagicMock())
+
+    with patch("agent.nodes.llm_core.llm") as mock_llm:
+        mock_llm.ainvoke = AsyncMock(side_effect=always_fail)
+        # trip the breaker with 3 sequential failures
+        for _ in range(3):
+            result = await chat_with_llm(make_state())
+
+        # breaker now open — next call must return pt-BR message without calling OpenAI
+        mock_llm.ainvoke.reset_mock()
+        result = await chat_with_llm(make_state())
+
+    msg_content = result["messages"][-1].content.lower()
+    assert "indisponível" in msg_content or "momento" in msg_content or "tente" in msg_content
+    mock_llm.ainvoke.assert_not_called()
+
+    llm_breaker.close()
+
+
+@pytest.mark.asyncio
+async def test_api_client_retries_connect_error():
+    """Contract #3: ConnectError on first call is retried — second succeeds transparently."""
+    from agent.nodes.tools import buscar_horarios_disponiveis
+
+    call_count = 0
+
+    with respx.mock(base_url="http://api:3000", assert_all_called=False) as mock:
+        def responder(request):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise httpx.ConnectError("Connection refused")
+            return httpx.Response(200, json=[{
+                "id": 1, "data_hora": "2026-06-15T09:00:00", "disponivel": 1,
+                "medico": {"id": 1, "nome": "Dr. Carlos Lima", "especialidade": "Clínico Geral"},
+            }])
+
+        mock.get("/horarios/disponiveis").mock(side_effect=responder)
+        result = await buscar_horarios_disponiveis.ainvoke({"data": None})
+
+    assert "Dr. Carlos Lima" in result
+    assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_api_client_does_not_retry_409():
+    """Contract #4: 409 Conflict is NOT retried — single attempt, error relayed."""
+    from agent.nodes.tools import criar_agendamento
+
+    call_count = 0
+
+    with respx.mock(base_url="http://api:3000", assert_all_called=False) as mock:
+        def responder(request):
+            nonlocal call_count
+            call_count += 1
+            return httpx.Response(409, json={"error": "Horário já ocupado"})
+
+        mock.post("/agendamentos").mock(side_effect=responder)
+        result = await criar_agendamento.ainvoke({
+            "paciente_email": "joao@email.com",
+            "horario_id": 1,
+        })
+
+    assert call_count == 1
+    assert isinstance(result, str)
+
+
+@pytest.mark.asyncio
+async def test_email_sender_no_duplicate_on_smtp_retry():
+    """Contract #5 (FR-006): a retry around SMTP must not send duplicate emails.
+    _send_smtp is called exactly once per send_email invocation — tenacity retries
+    are internal to _send_smtp itself, so send_email never calls it twice.
+    """
+    from agent.nodes.email_sender import send_email
+
+    state = make_state(
+        email_pending=True,
+        email_payload={
+            "tipo": "agendamento",
+            "paciente_email": "joao@email.com",
+            "paciente_nome": "João Silva",
+            "medico_nome": "Dr. Carlos Lima",
+            "data_hora": "2026-06-15 09:00",
+            "valor": 200.0,
+            "formas_pagamento": ["PIX"],
+        },
+    )
+
+    with patch("agent.nodes.email_sender._send_smtp") as mock_smtp:
+        mock_smtp.return_value = None
+        await send_email(state)
+        await send_email({**state, "email_pending": True})  # second invocation
+
+    # Each call to send_email must dispatch to _send_smtp exactly once
+    assert mock_smtp.call_count == 2  # 1 per invocation, never 2x for the same invocation

@@ -113,7 +113,7 @@ graph = create_agent(
 
 ## Relação com outras decisões
 
-- **ADR-024** (retry): `ModelRetryMiddleware` dentro de `create_agent`; `tenacity`/`pybreaker` nos nós externos (transcriber, api_client).
+- **ADR-024** (retry): `ModelRetryMiddleware` dentro de `create_agent`; `tenacity` + `CircuitBreaker` customizado (de `agent.resilience`) nos nós externos (api_client). pybreaker foi descartado — ver ADR-024 notas de implementação.
 - **ADR-029** (B7): guardrails — `PIIMiddleware` built-in + spike para injection/off-scope.
 - **ADR-030** (B8): contexto — `SummarizationMiddleware` built-in.
 - **Spec 007** (HITL): `HumanInTheLoopMiddleware` é a via natural do P9.

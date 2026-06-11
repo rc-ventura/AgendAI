@@ -1,9 +1,16 @@
 import base64
+import openai
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, AIMessage, ToolMessage
 
 from agent.state import AgendAIState
 from agent.nodes.tools import ALL_TOOLS
+from agent.resilience import (
+    CircuitOpenError,
+    invoke_with_resilience,
+    PT_BR_UNAVAILABLE,
+    RETRYABLE_EXCEPTIONS,
+)
 
 SYSTEM_PROMPT = """Você é AgendAI, assistente de agendamento médico da Clínica Saúde.
 
@@ -71,17 +78,25 @@ async def chat_with_llm(state: AgendAIState) -> dict:
     sanitized = _sanitize_messages(list(state["messages"]))
     messages = [SystemMessage(content=SYSTEM_PROMPT)] + sanitized
 
-    if state.get("input_type") == "audio":
-        response = await audio_llm.ainvoke(messages)
-        # opção simples: sempre pede audio; extrai quando não há tool calls
-        if not getattr(response, "tool_calls", None):
-            audio_info = response.additional_kwargs.get("audio", {})
-            if audio_info and "data" in audio_info:
-                return {
-                    "messages": [response],
-                    "final_response": base64.b64decode(audio_info["data"]),
-                }
+    try:
+        if state.get("input_type") == "audio":
+            response = await invoke_with_resilience(audio_llm, messages)
+            # opção simples: sempre pede audio; extrai quando não há tool calls
+            if not getattr(response, "tool_calls", None):
+                audio_info = response.additional_kwargs.get("audio", {})
+                if audio_info and "data" in audio_info:
+                    return {
+                        "messages": [response],
+                        "final_response": base64.b64decode(audio_info["data"]),
+                    }
+            return {"messages": [response]}
+
+        response = await invoke_with_resilience(llm, messages)
         return {"messages": [response]}
 
-    response = await llm.ainvoke(messages)
-    return {"messages": [response]}
+    except CircuitOpenError:
+        unavailable = AIMessage(content=PT_BR_UNAVAILABLE)
+        return {"messages": [unavailable]}
+    except (openai.APIConnectionError, openai.APITimeoutError, openai.RateLimitError):
+        unavailable = AIMessage(content=PT_BR_UNAVAILABLE)
+        return {"messages": [unavailable]}

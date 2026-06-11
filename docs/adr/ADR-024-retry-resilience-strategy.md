@@ -1,8 +1,8 @@
 # ADR-024 — Estratégia de Retry e Resiliência (Agent + API)
 
-**Status:** Proposto — implementação mapeada na Spec 005 (P1)
+**Status:** Implementado (B6 — 2026-06-10) — aguarda commit manual
 
-**Data:** 2026-06-03
+**Data:** 2026-06-03 | **Última atualização:** 2026-06-10
 
 **Relacionado a:** [Spec 005 — Agent Hardening](../../specs/005-agent-hardening/spec.md)
 
@@ -233,3 +233,56 @@ Funciona apenas com axios. A API usa `pg` (driver Postgres) diretamente, não ax
 - **Spec 005 P1**: esta é a decisão técnica que embasa as tasks de implementação do P1.
 - **Spec 005 P3** (Guardrails): circuit breaker em `llm_core.py` é o precursor — mesmo ponto
   de extensão onde os guardrails de input serão adicionados.
+
+---
+
+## Notas de Implementação (B6 — 2026-06-10)
+
+### Desvio: pybreaker → CircuitBreaker customizado
+
+O ADR original especificava `pybreaker` como circuit breaker. Na implementação, `pybreaker 1.4.1`
+usa `@gen.coroutine` do Tornado para suporte async — incompatível com asyncio puro. A lib foi
+removida e substituída por uma classe `CircuitBreaker` de ~30 linhas em `agent/agent/resilience.py`.
+
+Ver learning lesson completa: `docs/learning-lessons/circuit_breaker_custom_vs_libs.md`
+
+Esta abordagem é consistente com o que a comunidade de agentes de IA faz em produção: toda
+referência encontrada usa implementações customizadas, não libs genéricas.
+
+### Desvio: transcriber.py / tts.py removidos (B5)
+
+O ADR especificava retry em `transcriber.py` e `tts.py`. Ambos foram eliminados no B5 (ADR-028)
+com a migração para o modelo `gpt-audio` que processa áudio nativo. Retry em STT/TTS não se aplica.
+
+### Arquivo de resiliência extraído
+
+Todo código de retry e circuit breaker reside em `agent/agent/resilience.py` — **não** em
+`llm_core.py`. Exporta `CircuitBreaker`, `CircuitOpenError`, `llm_breaker` (singleton),
+`invoke_with_resilience`, `PT_BR_UNAVAILABLE`, `RETRYABLE_EXCEPTIONS`. Reutilizável pelo
+`CircuitBreakerMiddleware` planejado no B7 (ADR-026).
+
+### Lambda vs. async def no tenacity
+
+O decorator `@retry` do tenacity detecta `asyncio.iscoroutinefunction()` para decidir entre
+`Retrying` (sync) e `AsyncRetrying`. Um lambda que retorna coroutine é **sync** para o tenacity
+— ele nunca atrasa as tentativas, pois não vê a exception (a coroutine não foi awaited).
+**Solução:** sempre usar `async def` como função base antes de decorar com `@retry`.
+
+### Observabilidade do Circuit Breaker
+
+O `CircuitBreaker` emite logs Python estruturados em três eventos:
+
+| Evento | Nível | Mensagem |
+|---|---|---|
+| Circuito abre | WARNING | `circuit_breaker=open fails=3 reset_in=30s` |
+| Call bloqueada (circuito aberto) | WARNING | `circuit_breaker=blocked remaining=Xs` |
+| Circuito fecha (sucesso após OPEN) | INFO | `circuit_breaker=closed` |
+
+Esses logs aparecem no `docker compose logs langgraph-server` e, via LangSmith callback,
+nas traces do agente quando `LANGSMITH_TRACING=true`.
+
+### Gap vs. modelo completo (Hannecke)
+
+A implementação atual cobre apenas **hard failures** (1 de 5 categorias). O modelo completo
+adiciona estados DEGRADED e HALF-OPEN, health score com decay, e detecção de falhas semânticas.
+Ver `docs/learning-lessons/circuit_breaker_custom_vs_libs.md` para upgrade path detalhado.
