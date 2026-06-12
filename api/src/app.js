@@ -1,5 +1,6 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
+const requestId = require('./middlewares/requestId');
 const requestLogger = require('./middlewares/requestLogger');
 const errorHandler = require('./middlewares/errorHandler');
 const horariosRouter = require('./routes/horarios');
@@ -32,6 +33,7 @@ function createApp(pool) {
   if (process.env.NODE_ENV !== 'test') {
     app.use(limiter);
   }
+  app.use(requestId);
   app.use(requestLogger);
 
   app.use('/horarios', horariosRouter(pool));

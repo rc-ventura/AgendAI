@@ -169,13 +169,13 @@ Polyglot: agent at `agent/agent/`, agent tests `agent/tests/`, API at `api/src/`
 
 **Independent Test**: The 3 outcomes in `contracts/observability.md` (one id across services, searchable < 5 min, id on error lines).
 
-- [ ] T041 [P] [US5] Failing-first tests in `api/tests/`: one `request_id` propagates across services and appears on error log lines (per `contracts/observability.md`)
-- [ ] T042 [US5] `nginx/nginx.conf.template`: generate/propagate `X-Request-ID` to upstreams
-- [ ] T043 [P] [US5] New `api/src/middlewares/requestId.js`: accept inbound `X-Request-ID` or generate one; expose on `req`
-- [ ] T044 [US5] `api/src/middlewares/requestLogger.js`: structured JSON logs including `request_id` (no PII)
-- [ ] T045 [P] [US5] Add `structlog` to `agent/pyproject.toml`; configure JSON output in the agent
-- [ ] T046 [US5] Agent: read inbound `X-Request-ID` (per research R7 SDK-metadata probe) and attach it to LangSmith run metadata so a trace is findable by id
-- [ ] T047 [US5] Validate observability contract (SC-012); create `docs/adr/ADR-031-structured-logging.md` + learning-lesson; **manual gate → commit on approval**
+- [x] T041 [P] [US5] Failing-first tests in `api/tests/`: one `request_id` propagates across services and appears on error log lines (per `contracts/observability.md`) — 7 testes em `observability.test.js`; unit tests para `requestId.js` + integração header propagation
+- [x] T042 [US5] `nginx/nginx.conf.template`: generate/propagate `X-Request-ID` to upstreams — `proxy_set_header X-Request-ID $request_id` (nginx built-in ≥1.11)
+- [x] T043 [P] [US5] New `api/src/middlewares/requestId.js`: accept inbound `X-Request-ID` or generate one; expose on `req`
+- [x] T044 [US5] `api/src/middlewares/requestLogger.js`: structured JSON logs including `request_id` (no PII); `errorHandler.js` logs 5xx com `request_id`
+- [x] T045 [P] [US5] `agent/agent/logging_config.py`: JSON formatter mínimo sobre Python `logging` padrão (sem structlog — LangSmith cobre observabilidade do agente); `configure_logging()` chamado em `graph.py`
+- [x] T046 [US5] BFF (`route.ts`): injeta `request_id` (de `X-Request-ID` header) em `metadata` do run → LangSmith trace pesquisável pelo nginx ID
+- [x] T047 [US5] Validate observability contract (SC-012); `docs/adr/ADR-031-structured-logging.md` + `observability_correlation_id.md` criados; 48 Jest + 91 pytest verdes; **manual gate → aguarda aprovação e commit**
 
 **Checkpoint**: correlation id end-to-end; US5 independently validated.
 

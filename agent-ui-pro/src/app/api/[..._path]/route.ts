@@ -20,7 +20,13 @@ const { GET, POST, PUT, PATCH, DELETE, OPTIONS, runtime } = initApiPassthrough({
   }),
   bodyParameters: (req: NextRequest, body: unknown) => {
     if (req.method === "POST" && req.url.includes("/runs")) {
-      return { ...(body as object), durability: "exit" };
+      const base = { ...(body as object), durability: "exit" };
+      const requestId = req.headers.get("x-request-id");
+      if (!requestId) return base;
+      return {
+        ...base,
+        metadata: { ...((body as any)?.metadata ?? {}), request_id: requestId },
+      };
     }
     return body;
   },
