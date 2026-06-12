@@ -10,3 +10,4 @@ class AgendAIState(MessagesState):
     email_pending: bool
     email_payload: dict | None
     final_response: str | bytes | None
+    context_summary: str | None  # (ADR-030): last summarization text (observability/debug)

@@ -155,9 +155,9 @@ Polyglot: agent at `agent/agent/`, agent tests `agent/tests/`, API at `api/src/`
 
 **Independent Test**: A 20+ turn conversation: no context-limit error, key facts retained, latency stable (SC-011).
 
-- [ ] T038 [P] [US4] Failing-first test in `agent/tests/`: a 20+ turn conversation stays within the context limit and retains critical facts (booking/cancellation/preference)
-- [ ] T039 [US4] Add `SummarizationMiddleware` (token threshold) to the `create_agent` config; add `context_summary` field to state if needed (`agent/agent/state.py`) — FR-016/017
-- [ ] T040 [US4] Validate SC-011 (no overflow, facts retained, latency stable) **and SC-008 (per-conversation model cost stays flat as history grows, ≤ baseline — via the T002 harness)**; create `docs/adr/ADR-030-context-management.md` + learning-lesson; **manual gate → commit on approval**
+- [x] T038 [P] [US4] Failing-first test in `agent/tests/`: a 20+ turn conversation stays within the context limit and retains critical facts (booking/cancellation/preference)
+- [x] T039 [US4] Add `SummarizationMiddleware` (token threshold) to the `create_agent` config; add `context_summary` field to state if needed (`agent/agent/state.py`) — FR-016/017
+- [x] T040 [US4] Validate SC-011 (no overflow, facts retained, latency stable) **and SC-008 (per-conversation model cost stays flat as history grows, ≤ baseline — via the T002 harness)**; create `docs/adr/ADR-030-context-management.md` + learning-lesson; **manual gate → commit on approval**
 
 **Checkpoint**: long-conversation behavior validated; US4 independently validated.
 

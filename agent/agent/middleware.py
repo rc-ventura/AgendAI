@@ -8,11 +8,13 @@ This file is the only place that knows about all concerns together.
 Import LLM_MIDDLEWARE from here, not from resilience or guardrails.
 
 Middleware ordering (outermost → innermost):
-  Model call:  injection_guard → pii_email → pii_cpf → pii_phone → llm_cb → llm_retry → LLM
+  Model call:  injection_guard → pii_* → summarization → llm_cb → llm_retry → LLM
   Tool call:   tool_retry → api_cb → tool fn
-  (PIIMiddleware uses before_model/after_model state hooks, orthogonal to awrap_model_call)
+  (PIIMiddleware + SummarizationMiddleware use before_model/after_model state hooks)
+
+Summarization comes after PII so the summary is generated from already-redacted messages.
 """
-from langchain.agents.middleware import PIIMiddleware
+from langchain.agents.middleware import PIIMiddleware, SummarizationMiddleware
 
 from agent.guardrails import injection_guard_middleware
 from agent.resilience import (
@@ -40,13 +42,21 @@ pii_phone = PIIMiddleware(
     apply_to_input=True, apply_to_output=True, apply_to_tool_results=True,
 )
 
+# ── Context manager ─────────────────────────────────────────────
+summarization_middleware = SummarizationMiddleware(
+    "openai:gpt-4o-mini",
+    trigger=[("messages", 30), ("tokens", 6000)],
+    keep=("messages", 10),
+)
+
 # ── Assembled stack ────────────────────────────────────────────────────────────
 
 LLM_MIDDLEWARE = [
-    injection_guard_middleware,   # injection + off-scope block
-    pii_email,                    # email redaction (built-in PIIMiddleware)
-    pii_cpf,                      # CPF redaction (custom detector)
-    pii_phone,                    # phone redaction (custom detector)
+    injection_guard_middleware,       # (ADR-029): injection + off-scope block
+    pii_email,                        # (ADR-029): email redaction (built-in PIIMiddleware)
+    pii_cpf,                          # (ADR-029): CPF redaction (custom detector)
+    pii_phone,                        # (ADR-029): phone redaction (custom detector)
+    summarization_middleware,         # (ADR-030): context window management
     llm_circuit_breaker_middleware,
     _llm_retry_middleware,
     _tool_retry_middleware,

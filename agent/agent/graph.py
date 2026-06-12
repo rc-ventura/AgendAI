@@ -73,5 +73,5 @@ builder.add_conditional_edges(
 
 builder.add_edge("send_email", END)
 
-_MAX_GRAPH_STEPS = 25
+_MAX_GRAPH_STEPS = 60
 graph = builder.compile(cache=build_cache()).with_config({"recursion_limit": _MAX_GRAPH_STEPS})
