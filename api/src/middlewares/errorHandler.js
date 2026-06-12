@@ -1,8 +1,4 @@
-const pino = require('pino');
-
-const logger = pino({
-  level: process.env.NODE_ENV === 'test' ? 'silent' : 'info',
-});
+const logger = require('../logger');
 
 function errorHandler(err, req, res, next) {
   const status = err.statusCode || err.status || 500;

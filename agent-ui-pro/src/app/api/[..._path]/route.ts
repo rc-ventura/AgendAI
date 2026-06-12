@@ -23,9 +23,10 @@ const { GET, POST, PUT, PATCH, DELETE, OPTIONS, runtime } = initApiPassthrough({
       const base = { ...(body as object), durability: "exit" };
       const requestId = req.headers.get("x-request-id");
       if (!requestId) return base;
+      const existingMeta = (body as any)?.metadata ?? {};
       return {
         ...base,
-        metadata: { ...((body as any)?.metadata ?? {}), request_id: requestId },
+        metadata: { request_id: requestId, ...existingMeta },
       };
     }
     return body;

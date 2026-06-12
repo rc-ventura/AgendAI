@@ -1,5 +1,8 @@
 import base64
+import logging
 from typing import Literal
+
+logger = logging.getLogger(__name__)
 
 from langchain.agents import create_agent
 from langgraph.graph import StateGraph, START, END
@@ -30,6 +33,10 @@ def extract_audio_response(state: AgendAIState) -> dict:
         audio_info = getattr(msg, "additional_kwargs", {}).get("audio", {})
         if audio_info and "data" in audio_info:
             return {"final_response": base64.b64decode(audio_info["data"])}
+    logger.warning(
+        "extract_audio_response: no audio data found in %d messages; final_response will be None",
+        len(state["messages"]),
+    )
     return {}
 
 

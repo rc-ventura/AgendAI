@@ -1,8 +1,4 @@
-const pino = require('pino');
-
-const logger = pino({
-  level: process.env.NODE_ENV === 'test' ? 'silent' : 'info',
-});
+const logger = require('../logger');
 
 function requestLogger(req, res, next) {
   const start = Date.now();

@@ -50,6 +50,21 @@ class CircuitBreaker:
             return 0.0
         return max(0.0, self._reset_timeout - (time.monotonic() - self._opened_at))
 
+    def record_success(self, log_prefix: str = "circuit_breaker") -> None:
+        if self._fails > 0:
+            logger.info("%s=closed", log_prefix)
+        self._fails = 0
+        self._opened_at = None
+
+    def record_failure(self, log_prefix: str = "circuit_breaker") -> None:
+        self._fails += 1
+        if self._fails >= self._fail_max:
+            self._opened_at = time.monotonic()
+            logger.warning(
+                "%s=open fails=%d reset_in=%.0fs",
+                log_prefix, self._fails, self._reset_timeout,
+            )
+
 
 llm_breaker = CircuitBreaker(fail_max=3, reset_timeout=30)
 api_breaker = CircuitBreaker(fail_max=3, reset_timeout=30)
@@ -91,20 +106,10 @@ class LLMCircuitBreakerMiddleware(AgentMiddleware):
             return AIMessage(content=PT_BR_UNAVAILABLE)
         try:
             response = await handler(request)
-            if llm_breaker._fails > 0:
-                logger.info("circuit_breaker=closed")
-            llm_breaker._fails = 0
-            llm_breaker._opened_at = None
+            llm_breaker.record_success()
             return response
         except (openai.APIConnectionError, openai.APITimeoutError, openai.RateLimitError):
-            llm_breaker._fails += 1
-            if llm_breaker._fails >= llm_breaker._fail_max:
-                llm_breaker._opened_at = time.monotonic()
-                logger.warning(
-                    "circuit_breaker=open fails=%d reset_in=%.0fs",
-                    llm_breaker._fails,
-                    llm_breaker._reset_timeout,
-                )
+            llm_breaker.record_failure()
             return AIMessage(content=PT_BR_UNAVAILABLE)
 
 
@@ -149,20 +154,10 @@ class APICircuitBreakerMiddleware(AgentMiddleware):
             return ToolMessage(content=PT_BR_API_UNAVAILABLE, tool_call_id=tool_call_id, name=tool_name, status="error")
         try:
             result = await handler(request)
-            if api_breaker._fails > 0:
-                logger.info("api_circuit_breaker=closed")
-            api_breaker._fails = 0
-            api_breaker._opened_at = None
+            api_breaker.record_success(log_prefix="api_circuit_breaker")
             return result
         except (httpx.ConnectError, httpx.TimeoutException):
-            api_breaker._fails += 1
-            if api_breaker._fails >= api_breaker._fail_max:
-                api_breaker._opened_at = time.monotonic()
-                logger.warning(
-                    "api_circuit_breaker=open fails=%d reset_in=%.0fs",
-                    api_breaker._fails,
-                    api_breaker._reset_timeout,
-                )
+            api_breaker.record_failure(log_prefix="api_circuit_breaker")
             raise  # ToolRetryMiddleware (outer) handles the retry
 
 

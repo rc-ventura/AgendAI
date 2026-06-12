@@ -21,6 +21,7 @@ const limiter = rateLimit({
 function createApp(pool) {
   const app = express();
 
+  app.use(requestId);
   app.use(express.json());
   // Request timeout: abort connections that hang for more than 30s
   app.use((req, res, next) => {
@@ -33,7 +34,6 @@ function createApp(pool) {
   if (process.env.NODE_ENV !== 'test') {
     app.use(limiter);
   }
-  app.use(requestId);
   app.use(requestLogger);
 
   app.use('/horarios', horariosRouter(pool));
