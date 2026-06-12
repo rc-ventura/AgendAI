@@ -183,10 +183,10 @@ Polyglot: agent at `agent/agent/`, agent tests `agent/tests/`, API at `api/src/`
 
 ## Phase 8: Polish & Cross-Cutting
 
-- [ ] T048 [P] Update `docs/adr/README.md` index with ADR-027, 028, 029, 030, 031
-- [ ] T049 [P] Update `CLAUDE.md` Architecture section if the harness changed (audio nodes removed, `create_agent` scaffold)
-- [ ] T050 Run full `quickstart.md` per-batch validation end-to-end
-- [ ] T051 Final regression: 70 pytest + 39 Jest + all new tests green; confirm SC-001..013 met or recorded
+- [x] T048 [P] Update `docs/adr/README.md` index with ADR-027, 028, 029, 030, 031; ADR-024/025/026 status → Accepted
+- [x] T049 [P] Update `CLAUDE.md`: test counts (48 Jest / 91 pytest), audio nodes (transcriber/tts removidos), create_agent scaffold, middleware stack, Redis cache
+- [x] T050 Run full quickstart validation — 91 pytest + 48 Jest verdes localmente
+- [x] T051 Final regression: 91 pytest + 48 Jest green; SC-001..013 met or recorded per ADR-024..031
 
 ---
 
