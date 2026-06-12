@@ -101,3 +101,56 @@ Documentação sem instalação não conta.
 - [PIIMiddleware reference](https://reference.langchain.com/python/langchain/agents/middleware/pii/PIIMiddleware)
 - [NeMo Guardrails — LangChain agent middleware](https://docs.nvidia.com/nemo/guardrails/latest/integration/langchain/agent-middleware.html)
 - [[arquitetura_redis_postgress]] · [ADR-026](../adr/ADR-026-create-agent-middleware-vs-manual.md)
+
+---
+
+## Implementação B7 — lições adicionais (2026-06-12)
+
+### `PIIMiddleware` built-in não cobre CPF
+
+O built-in cobre `"email"`, `"credit_card"`, `"ip"`. CPF (identificador fiscal brasileiro) não
+está incluído. Em vez de compor o built-in com um custom para CPF, foi mais limpo implementar
+um único `SecurityMiddleware` que cobre todos os tipos PII do domínio.
+
+Regex CPF adotado: `\b\d{3}\.?\d{3}\.?\d{3}[-.]?\d{2}\b`
+
+### `request.messages` — atribuição direta deprecada no LangChain
+
+```python
+request.messages = redacted_msgs  # DeprecationWarning: use request.override(messages=...)
+```
+
+O `ModelRequest` é imutável — `request.override(messages=...)` retorna uma nova instância.
+Problema: `MagicMock().override(...)` não levanta `AttributeError`, retorna outro MagicMock.
+
+**Solução para distinguir prod de teste:**
+```python
+if callable(getattr(type(request), "override", None)):
+    request = request.override(messages=redacted_msgs)  # LangChain prod
+else:
+    request.messages = redacted_msgs  # MagicMock em testes
+```
+
+`type(MagicMock()).override` retorna `None`; `type(ModelRequest()).override` retorna o método.
+
+### Regex com quantificadores `{0,2}` para variantes de injeção
+
+`"Disregard your previous instructions"` tem dois modificadores antes do substantivo.
+`\s+(your|the|all|previous)\s+(instructions)` só cobre um. Fix:
+
+```python
+r'disregard\s+(\w+\s+){0,2}(instructions?|rules?|constraints?|guidelines?)'
+```
+
+Cobre 0, 1, ou 2 palavras intermediárias sem regex explosivo.
+
+### Posicionamento do SecurityMiddleware
+
+Deve ser **outermost** (primeiro em `LLM_MIDDLEWARE`). Injection bloqueada antes do
+circuit breaker — o CB não deve contar refusals de guardrail como "falhas de LLM".
+
+### Spike NeMo Guardrails — resultado
+
+Descartado: servidor extra, 200–500ms de latência, Colang DSL. Corpus pequeno + system
+prompt como backstop semântico justificam o regex determinístico.
+Quando revisar: se ataques reais passarem o regex recorrentemente após go-live.

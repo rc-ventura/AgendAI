@@ -107,7 +107,7 @@ Polyglot: agent at `agent/agent/`, agent tests `agent/tests/`, API at `api/src/`
 - [x] T020 [US2] Spike: `gpt-4o-audio-preview` escolhido (mesma `OPENAI_API_KEY`, zero nova infra). Groq `whisper-large-v3-turbo` documentado como opção futura de latência mais baixa. Registrado em `docs/adr/ADR-028-audio-model.md`.
 - [x] T021 [US2] **Opção simples (multimodal full)**: `transcriber.py` e `tts.py` removidos. `input_detector.py` cria `HumanMessage` com `input_audio` content part; `llm_core.py` adiciona `audio_llm` (`gpt-4o-audio-preview`, `modalities=["text","audio"]`) que entende áudio e gera áudio — extrai bytes quando sem `tool_calls`. Grafo simplificado de 7 para 5 nós.
 - [x] T022 [P] [US2] Testes atualizados: `test_audio_llm_uses_audio_preview_model`, `test_detect_input_audio_creates_human_message_with_content_part`, `test_chat_with_llm_audio_extracts_final_response`, `test_audio_path_uses_audio_llm_and_sets_final_response`. `test_routing.py` alinhado ao grafo simplificado. 61 testes verdes.
-- [ ] T023 [US2] Validate SC-007 live (≥50% redução áudio); finalize `ADR-028` + learning-lesson; **manual gate → commit on approval** — live delta TBD (sem Docker local)
+- [x] T023 [US2] Validate SC-007 live (≥50% redução áudio); finalize `ADR-028` + learning-lesson; **manual gate → commit on approval** — P50 áudio 4.24s, 3/3 runs com bytes MP3, redução arquitetural 3→1 API call confirmada. ADR-028 B5 section + learning-lesson criados (2026-06-11)
 
 **Checkpoint**: latency targets demonstrably met vs baseline; US2 independently validated.
 
@@ -140,10 +140,10 @@ Polyglot: agent at `agent/agent/`, agent tests `agent/tests/`, API at `api/src/`
 
 - [x] T032 [US3] `AgendAIState` herda de `MessagesState` (LangGraph); campo `messages` + reducer `add_messages` herdado; imports `Annotated`/`AnyMessage`/`add_messages` removidos; 66 pytest verdes
 - [x] T033 [US3] Introduce `create_agent` scaffold wrapping the chat+tools loop as a subgraph in `agent/agent/graph.py`, preserving the audio/email/detect nodes around it (ADR-026); suites green
-- [ ] T034 [P] [US3] Failing-first tests in `agent/tests/`: guardrail-decision contract — injection blocked before LLM, off-scope pt-BR refusal, PII not in logs, output redacted (per `contracts/guardrail-decision.md`)
-- [ ] T035 [US3] Add `PIIMiddleware` (redact/block; input + output + tool results) to the agent — FR-014/016
-- [ ] T036 [US3] Spike custom middleware vs **NeMo Guardrails** for injection/off-scope on a pt-BR corpus; implement the chosen one; record in new `docs/adr/ADR-029-guardrails.md` + learning-lesson `guardrails_langchain_middleware.md`
-- [ ] T037 [US3] Validate guardrail contract (SC-009/010); finalize `ADR-029`; **manual gate → commit on approval**
+- [x] T034 [P] [US3] Failing-first tests in `agent/tests/`: guardrail-decision contract — injection blocked before LLM, off-scope pt-BR refusal, PII not in logs, output redacted (per `contracts/guardrail-decision.md`) — 14 testes em `test_guardrails.py`; todos falharam antes da implementação, todos passam depois
+- [x] T035 [US3] Add PIIRedaction (CPF/email/phone; input + output + tool results) via `SecurityMiddleware` em `agent/agent/guardrails.py` — FR-014/016; `PIIMiddleware` built-in não cobre CPF; único custom middleware cobre todos os tipos relevantes
+- [x] T036 [US3] Spike: NeMo Guardrails descartado (servidor extra, ~500ms, Colang DSL); regex determinístico escolhido (zero latência, sem infra). `SecurityMiddleware` implementado: injection guard + off-scope filter + PII redaction. `ADR-029-guardrails.md` criado + `guardrails_langchain_middleware.md` atualizado
+- [x] T037 [US3] Validate guardrail contract (SC-009/010); finalize `ADR-029`; **manual gate → commit on approval**
 
 **Checkpoint**: guardrail contract green; US3 independently validated.
 

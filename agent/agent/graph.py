@@ -5,7 +5,7 @@ from langchain.agents import create_agent
 from langgraph.graph import StateGraph, START, END
 
 from agent.cache import build_cache
-from agent.resilience import LLM_MIDDLEWARE
+from agent.middleware import LLM_MIDDLEWARE
 from agent.state import AgendAIState
 from agent.nodes.input_detector import detect_input_type
 from agent.nodes.llm_core import base_llm, audio_llm, SYSTEM_PROMPT
@@ -33,12 +33,8 @@ def extract_audio_response(state: AgendAIState) -> dict:
     return {}
 
 
-# B6/B7 (ADR-024/ADR-026): LLM_MIDDLEWARE = [circuit_breaker (outer), retry (inner)].
-# PIIMiddleware and SummarizationMiddleware added in T035/B7.
 _text_agent = create_agent(base_llm, list(ALL_TOOLS), system_prompt=SYSTEM_PROMPT, middleware=LLM_MIDDLEWARE)
 
-# B5 (ADR-028): same create_agent pattern for audio; gpt-audio returns audio bytes
-# in additional_kwargs["audio"]["data"] which extract_audio_response unpacks.
 _audio_agent = create_agent(audio_llm, list(ALL_TOOLS), system_prompt=SYSTEM_PROMPT, middleware=LLM_MIDDLEWARE)
 
 builder = StateGraph(AgendAIState)
@@ -77,11 +73,5 @@ builder.add_conditional_edges(
 
 builder.add_edge("send_email", END)
 
-# B4 (ADR-025): Redis cache backend. Nodes opt-in via CachePolicy — none configured
-# yet (execute_tools mixes stable + dynamic tools; safe split deferred to a future batch).
-#
-# recursion_limit: hard cycle guard. Each node execution counts as 1 step.
-# A normal scheduling flow uses ~8 steps; 25 allows ~10 LLM+tool rounds
-# before GraphRecursionError fires — far above any legitimate use case.
 _MAX_GRAPH_STEPS = 25
 graph = builder.compile(cache=build_cache()).with_config({"recursion_limit": _MAX_GRAPH_STEPS})

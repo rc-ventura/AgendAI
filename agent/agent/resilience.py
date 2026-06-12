@@ -63,7 +63,7 @@ PT_BR_API_UNAVAILABLE = (
     "Por favor, tente novamente em alguns instantes."
 )
 
-# Retryable exception groups — used by both middleware instances.
+# Retryable exception groups.
 RETRYABLE_LLM_EXCEPTIONS = (
     openai.APIConnectionError,
     openai.APITimeoutError,
@@ -74,7 +74,7 @@ RETRYABLE_HTTP_EXCEPTIONS = (httpx.ConnectError, httpx.TimeoutException)
 # Keep public alias for backwards-compatibility with existing imports.
 RETRYABLE_EXCEPTIONS = RETRYABLE_LLM_EXCEPTIONS
 
-# ── LLM middleware stack (used by create_agent in graph.py) ───────────────────
+# ── Middleware classes  ──────
 
 
 class LLMCircuitBreakerMiddleware(AgentMiddleware):
@@ -169,13 +169,3 @@ class APICircuitBreakerMiddleware(AgentMiddleware):
 # Module-level instances — exported so tests can call hooks directly.
 llm_circuit_breaker_middleware = LLMCircuitBreakerMiddleware()
 api_circuit_breaker_middleware = APICircuitBreakerMiddleware()
-
-# Ready-to-use middleware list for create_agent — outermost first.
-# Model call chain:  llm_cb (outer) → llm_retry (inner) → LLM
-# Tool call chain:   tool_retry (outer) → api_cb (inner) → tool_fn
-LLM_MIDDLEWARE = [
-    llm_circuit_breaker_middleware,
-    _llm_retry_middleware,
-    _tool_retry_middleware,
-    api_circuit_breaker_middleware,
-]

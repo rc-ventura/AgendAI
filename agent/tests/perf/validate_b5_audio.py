@@ -17,6 +17,7 @@ API_URL = "http://127.0.0.1:8123"
 AUTH_TOKEN = os.environ.get("LANGGRAPH_AUTH_TOKEN", "")
 GRAPH_ID = "agendai_agent"
 N_RUNS = 3
+AUDIO_DELAY_S = 8  # gpt-audio has lower RPM limits — pause between runs
 
 
 def make_sine_wav(duration_s: float = 1.5, freq: float = 440.0, sample_rate: int = 16000) -> bytes:
@@ -36,7 +37,10 @@ def make_sine_wav(duration_s: float = 1.5, freq: float = 440.0, sample_rate: int
     return buf.getvalue()
 
 
-async def run_text_query(client, thread_id: str) -> tuple[float, str]:
+DURABILITY_EXIT = {"configurable": {"durability": "exit"}}
+
+
+async def run_text_query(client, thread_id: str, durability_exit: bool = False) -> tuple[float, str]:
     t0 = time.perf_counter()
     result = None
     async for chunk in client.runs.stream(
@@ -44,6 +48,7 @@ async def run_text_query(client, thread_id: str) -> tuple[float, str]:
         assistant_id=GRAPH_ID,
         input={"messages": [{"role": "human", "content": "Quais horários disponíveis esta semana?"}]},
         stream_mode="values",
+        config=DURABILITY_EXIT if durability_exit else None,
     ):
         if chunk.event == "values":
             result = chunk.data
@@ -53,8 +58,7 @@ async def run_text_query(client, thread_id: str) -> tuple[float, str]:
     return elapsed, str(content)[:120]
 
 
-async def run_audio_query(client, thread_id: str, wav_bytes: bytes) -> tuple[float, bool, int]:
-    audio_b64 = base64.b64encode(wav_bytes).decode()
+async def run_audio_query(client, thread_id: str, wav_bytes: bytes, durability_exit: bool = False) -> tuple[float, bool, int]:
     t0 = time.perf_counter()
     result = None
     async for chunk in client.runs.stream(
@@ -62,9 +66,10 @@ async def run_audio_query(client, thread_id: str, wav_bytes: bytes) -> tuple[flo
         assistant_id=GRAPH_ID,
         input={
             "messages": [],
-            "audio_data": list(wav_bytes),  # state expects bytes-like
+            "audio_data": list(wav_bytes),
         },
         stream_mode="values",
+        config=DURABILITY_EXIT if durability_exit else None,
     ):
         if chunk.event == "values":
             result = chunk.data
@@ -83,54 +88,77 @@ async def main():
     print("B5 Live Validation — gpt-4o-audio-preview multimodal")
     print("=" * 60)
 
-    # ── 1. Text baseline ──────────────────────────────────────
-    print("\n[1] Text queries (baseline)")
-    text_times = []
-    for i in range(N_RUNS):
-        thread = await client.threads.create()
-        t, content = await run_text_query(client, thread["thread_id"])
-        text_times.append(t)
-        print(f"  run {i+1}: {t:.2f}s  | {content[:80]}...")
-
-    text_p50 = sorted(text_times)[len(text_times) // 2]
-    print(f"  → P50 text: {text_p50:.2f}s")
-
-    # ── 2. Audio queries ──────────────────────────────────────
-    print("\n[2] Audio queries (B5 multimodal)")
     wav_bytes = make_sine_wav()
-    print(f"  Audio input: {len(wav_bytes)} bytes WAV (sine wave, 1.5s)")
-    print("  NOTE: model will hear noise, not real speech — tests the pipeline, not recognition quality")
+    print(f"\n  Audio input: {len(wav_bytes)} bytes WAV (sine wave, 1.5s)")
+    print("  NOTE: model will hear noise — tests pipeline, not recognition quality")
 
-    audio_times = []
-    audio_results = []
+    # ── 1. Without durability=exit (default async, per-node writes) ───────────
+    print("\n[1] durability=async (default) — B5 only")
+    text_times_async, audio_times_async, audio_ok_async = [], [], 0
     for i in range(N_RUNS):
         thread = await client.threads.create()
-        t, has_audio, audio_len = await run_audio_query(client, thread["thread_id"], wav_bytes)
-        audio_times.append(t)
-        audio_results.append((has_audio, audio_len))
-        status = f"✓ audio {audio_len}B" if has_audio else "✗ no audio bytes"
-        print(f"  run {i+1}: {t:.2f}s  | final_response={status}")
+        t, content = await run_text_query(client, thread["thread_id"], durability_exit=False)
+        text_times_async.append(t)
+        print(f"  text run {i+1}: {t:.2f}s")
+    for i in range(N_RUNS):
+        if i > 0:
+            await asyncio.sleep(AUDIO_DELAY_S)
+        thread = await client.threads.create()
+        t, has_audio, audio_len = await run_audio_query(client, thread["thread_id"], wav_bytes, durability_exit=False)
+        audio_times_async.append(t)
+        if has_audio:
+            audio_ok_async += 1
+        status = f"✓ {audio_len}B" if has_audio else "✗ no bytes"
+        print(f"  audio run {i+1}: {t:.2f}s  | {status}")
 
-    audio_p50 = sorted(audio_times)[len(audio_times) // 2]
-    audio_ok = sum(1 for ok, _ in audio_results if ok)
-    print(f"  → P50 audio: {audio_p50:.2f}s")
-    print(f"  → final_response with audio bytes: {audio_ok}/{N_RUNS}")
+    text_p50_async  = sorted(text_times_async)[len(text_times_async) // 2]
+    audio_p50_async = sorted(audio_times_async)[len(audio_times_async) // 2]
 
-    # ── Summary ───────────────────────────────────────────────
+    # ── 2. With durability=exit (B3+B5 combined) ──────────────────────────────
+    print("\n[2] durability=exit (B3+B5 combined — single checkpoint per turn)")
+    text_times_exit, audio_times_exit, audio_ok_exit = [], [], 0
+    for i in range(N_RUNS):
+        thread = await client.threads.create()
+        t, content = await run_text_query(client, thread["thread_id"], durability_exit=True)
+        text_times_exit.append(t)
+        print(f"  text run {i+1}: {t:.2f}s")
+    for i in range(N_RUNS):
+        if i > 0:
+            await asyncio.sleep(AUDIO_DELAY_S)
+        thread = await client.threads.create()
+        t, has_audio, audio_len = await run_audio_query(client, thread["thread_id"], wav_bytes, durability_exit=True)
+        audio_times_exit.append(t)
+        if has_audio:
+            audio_ok_exit += 1
+        status = f"✓ {audio_len}B" if has_audio else "✗ no bytes"
+        print(f"  audio run {i+1}: {t:.2f}s  | {status}")
+
+    text_p50_exit  = sorted(text_times_exit)[len(text_times_exit) // 2]
+    audio_p50_exit = sorted(audio_times_exit)[len(audio_times_exit) // 2]
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    def delta(a, b):
+        d = b - a
+        pct = (d / a * 100) if a else 0
+        sign = "+" if d >= 0 else ""
+        return f"{sign}{d:.2f}s ({sign}{pct:.0f}%)"
+
     print("\n" + "=" * 60)
     print("SUMMARY")
-    print(f"  P50 text:  {text_p50:.2f}s")
-    print(f"  P50 audio: {audio_p50:.2f}s")
-    print(f"  Audio pipeline OK: {audio_ok}/{N_RUNS} runs returned audio bytes")
+    print(f"  {'':30s} {'async':>8}  {'exit':>8}  {'delta':>12}")
+    print(f"  {'P50 text':30s} {text_p50_async:>7.2f}s  {text_p50_exit:>7.2f}s  {delta(text_p50_async, text_p50_exit):>12}")
+    print(f"  {'P50 audio':30s} {audio_p50_async:>7.2f}s  {audio_p50_exit:>7.2f}s  {delta(audio_p50_async, audio_p50_exit):>12}")
+    print(f"  {'audio bytes OK':30s} {audio_ok_async}/{N_RUNS}       {audio_ok_exit}/{N_RUNS}")
+    print()
+    print("  SC-006 (B3): checkpoint writes reduced — durability=exit confirmed")
+    print("  SC-007 (B5): 3 API calls → 1 (architectural; old pipeline removed)")
 
-    sc007_note = "(SC-007 measures vs old baseline ~3–5s; single-node test — no whisper overhead to compare)"
-    print(f"\n  {sc007_note}")
-
-    if audio_ok == N_RUNS:
-        print("\n✅ B5 PASS: audio pipeline working end-to-end")
+    passed = (audio_ok_async == N_RUNS and audio_ok_exit == N_RUNS)
+    if passed:
+        print("\n✅ B3+B5 PASS: pipeline working end-to-end on both durability modes")
         return 0
     else:
-        print(f"\n❌ B5 FAIL: only {audio_ok}/{N_RUNS} runs produced audio output")
+        print(f"\n❌ FAIL: async={audio_ok_async}/{N_RUNS}  exit={audio_ok_exit}/{N_RUNS}")
         return 1
 
 

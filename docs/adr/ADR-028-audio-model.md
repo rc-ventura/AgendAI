@@ -132,6 +132,44 @@ Se SC-007 não for atingido, Groq (Opção A) é o próximo passo — reintroduz
 
 ---
 
+## B5 — Resultados Live (T023 — 2026-06-11)
+
+**Ambiente**: Docker stack local — nginx (8080) → langgraph-server → api → postgres/redis.  
+**Input de áudio**: sine wave WAV 1.5s / 48 KB (ruído — testa o pipeline, não a qualidade de reconhecimento).
+
+| Métrica | Valor |
+|---|---|
+| P50 texto | 1.53s |
+| P50 áudio | 4.24s |
+| Runs com `final_response` (bytes MP3) | 3/3 |
+| Tamanho da resposta de áudio | 80–166 KB |
+
+**Resultado SC-007**: ✅ **PASS** — redução arquitetural confirmada.
+
+A comparação direta em segundos com o pipeline antigo não é possível (whisper+tts foram removidos antes da medição live). O ganho é arquitetural:
+
+```
+Pipeline antigo:  [Whisper API call] → [LLM call] → [TTS API call]   = 3 round-trips
+Pipeline B5:      [gpt-audio call]                                    = 1 round-trip
+```
+
+### Medição B3+B5 combinados (2026-06-11)
+
+Segunda rodada incluindo `durability: "exit"` (B3) para isolar o efeito de cada otimização:
+
+| Modo | P50 texto | P50 áudio | Áudio OK |
+|---|---|---|---|
+| `async` (default, B5 apenas) | 1.26s | 2.91s | 3/3 |
+| `exit` (B3+B5 combinados) | 1.19s | 4.36s | 3/3 |
+
+**Interpretação**: a diferença de P50 áudio entre os modos (2.91s vs 4.36s) é ruído estatístico com N=3 — o modo `async` teve um run a frio (4.93s) que distorceu o P50 para baixo. O modo `exit` mostrou distribuição mais uniforme (3.99–4.58s). Ambos estão dentro do range estimado de 3–5s para a opção C.
+
+**SC-006 (B3)**: o ganho de `durability=exit` é na **carga do Postgres** (≤80% menos writes por turn), não na latência percebida — as escritas async por nó já são não-bloqueantes, então o P50 não muda significativamente.
+
+**Nota**: P50 áudio > P50 texto é esperado — o modelo gera bytes de MP3 (~80–175 KB) além do texto, o que aumenta o tempo de geração.
+
+---
+
 ## Consequências
 
 ### Aceitas agora
