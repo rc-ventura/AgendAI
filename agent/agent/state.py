@@ -1,11 +1,8 @@
-from typing import Annotated, Literal
-from typing_extensions import TypedDict
-from langchain_core.messages import AnyMessage
-from langgraph.graph.message import add_messages
+from typing import Literal
+from langgraph.graph import MessagesState
 
 
-class AgendAIState(TypedDict):
-    messages: Annotated[list[AnyMessage], add_messages]
+class AgendAIState(MessagesState):
     input_type: Literal["text", "audio"]
     audio_data: bytes | None
     audio_format: str | None  # "wav", "mp3", "webm", "ogg" — declarado pelo chamador

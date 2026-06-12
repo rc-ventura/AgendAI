@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.language_models.chat_models import BaseChatModel
 
 from agent.state import AgendAIState
 
@@ -75,13 +76,12 @@ def test_system_prompt_directs_parallel_lookup():
 
 @pytest.mark.asyncio
 async def test_text_query_reaches_llm(mock_api_client):
-    """US1: text message flows through detect_input_type → chat_with_llm"""
+    """US1: text message flows through detect_input_type → text_agent (create_agent)"""
     from agent.graph import graph
 
     mock_ai_response = AIMessage(content="Aqui estão os horários disponíveis!")
 
-    with patch("agent.nodes.llm_core.llm") as mock_llm:
-        mock_llm.ainvoke = AsyncMock(return_value=mock_ai_response)
+    with patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_ai_response)):
         state = make_state(messages=[HumanMessage(content="Quais horários?")])
         result = await graph.ainvoke(state, config={"configurable": {"thread_id": "test-1"}})
 
@@ -99,9 +99,8 @@ async def test_email_pending_triggers_send_email(mock_api_client):
     # Simulate LLM returning a final answer after tools already set email_pending
     mock_final_response = AIMessage(content="Consulta agendada com sucesso!")
 
-    with patch("agent.nodes.llm_core.llm") as mock_llm, \
+    with patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_final_response)), \
          patch("agent.nodes.email_sender._send_smtp") as mock_smtp:
-        mock_llm.ainvoke = AsyncMock(return_value=mock_final_response)
         mock_smtp.return_value = None
 
         state = make_state(
@@ -124,8 +123,9 @@ async def test_email_pending_triggers_send_email(mock_api_client):
 
 @pytest.mark.asyncio
 async def test_audio_path_uses_audio_llm_and_sets_final_response():
-    """US4 / B5: audio_data → detect_input_type builds input_audio msg → audio_llm returns
-    audio bytes → final_response set. No transcriber.py or tts.py needed (ADR-028)."""
+    """US4 / B5: audio_data → detect_input_type builds input_audio msg → audio_agent
+    (create_agent with gpt-audio) runs loop → extract_audio_response unpacks bytes.
+    No transcriber.py or tts.py needed (ADR-028)."""
     import base64
     from agent.graph import graph
 
@@ -137,9 +137,7 @@ async def test_audio_path_uses_audio_llm_and_sets_final_response():
         additional_kwargs={"audio": {"data": b64_audio, "id": "audio_x"}},
     )
 
-    with patch("agent.nodes.llm_core.audio_llm") as mock_audio_llm:
-        mock_audio_llm.ainvoke = AsyncMock(return_value=mock_audio_response)
-
+    with patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_audio_response)):
         state = make_state(
             messages=[],
             input_type="audio",
@@ -159,7 +157,7 @@ async def test_full_scheduling_flow_us2(mock_api_client):
 
     call_count = 0
 
-    async def llm_side_effect(messages, **kwargs):
+    async def llm_side_effect(*args, **kwargs):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -180,9 +178,8 @@ async def test_full_scheduling_flow_us2(mock_api_client):
         # Round 3+: final confirmation
         return AIMessage(content="Consulta agendada com sucesso para o Dr. Carlos Lima!")
 
-    with patch("agent.nodes.llm_core.llm") as mock_llm, \
+    with patch.object(BaseChatModel, "ainvoke", AsyncMock(side_effect=llm_side_effect)), \
          patch("agent.nodes.email_sender._send_smtp") as mock_smtp:
-        mock_llm.ainvoke = AsyncMock(side_effect=llm_side_effect)
         mock_smtp.return_value = None
 
         state = make_state(messages=[HumanMessage(content="Quero agendar uma consulta para joao@email.com")])
@@ -201,7 +198,7 @@ async def test_cancellation_flow_us3(mock_api_client):
 
     call_count = 0
 
-    async def llm_side_effect(messages, **kwargs):
+    async def llm_side_effect(*args, **kwargs):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -211,9 +208,8 @@ async def test_cancellation_flow_us3(mock_api_client):
             )
         return AIMessage(content="Seu agendamento foi cancelado com sucesso.")
 
-    with patch("agent.nodes.llm_core.llm") as mock_llm, \
+    with patch.object(BaseChatModel, "ainvoke", AsyncMock(side_effect=llm_side_effect)), \
          patch("agent.nodes.email_sender._send_smtp") as mock_smtp:
-        mock_llm.ainvoke = AsyncMock(side_effect=llm_side_effect)
         mock_smtp.return_value = None
 
         state = make_state(messages=[HumanMessage(content="Cancele meu agendamento 1 para joao@email.com")])
@@ -233,8 +229,7 @@ async def test_run_id_present_for_langsmith():
 
     mock_ai_response = AIMessage(content="Olá!")
 
-    with patch("agent.nodes.llm_core.llm") as mock_llm:
-        mock_llm.ainvoke = AsyncMock(return_value=mock_ai_response)
+    with patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_ai_response)):
         state = make_state(messages=[HumanMessage(content="Oi")])
         config = RunnableConfig(
             run_name="test_langsmith_trace",

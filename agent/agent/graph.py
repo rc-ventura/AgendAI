@@ -1,45 +1,87 @@
+import base64
 from typing import Literal
 
+from langchain.agents import create_agent
 from langgraph.graph import StateGraph, START, END
-from langchain_core.messages import AIMessage
 
 from agent.cache import build_cache
+from agent.resilience import LLM_MIDDLEWARE
 from agent.state import AgendAIState
 from agent.nodes.input_detector import detect_input_type
-from agent.nodes.llm_core import chat_with_llm
-from agent.nodes.tools import tool_node
+from agent.nodes.llm_core import base_llm, audio_llm, SYSTEM_PROMPT
+from agent.nodes.tools import ALL_TOOLS
 from agent.nodes.email_sender import send_email
 from agent.nodes.tool_result_processor import process_tool_results
 
 
-def route_after_llm(state: AgendAIState) -> Literal["execute_tools", "send_email", "__end__"]:
-    last = state["messages"][-1]
-    if isinstance(last, AIMessage) and getattr(last, "tool_calls", None):
-        return "execute_tools"
+def route_by_input_type(state: AgendAIState) -> Literal["text_agent", "audio_agent"]:
+    return "audio_agent" if state.get("input_type") == "audio" else "text_agent"
+
+
+def route_after_agent(state: AgendAIState) -> Literal["send_email", "__end__"]:
     if state.get("email_pending"):
         return "send_email"
     return END
 
 
+def extract_audio_response(state: AgendAIState) -> dict:
+    """Extracts audio bytes from the final AIMessage after the audio_agent loop exits."""
+    for msg in reversed(state["messages"]):
+        audio_info = getattr(msg, "additional_kwargs", {}).get("audio", {})
+        if audio_info and "data" in audio_info:
+            return {"final_response": base64.b64decode(audio_info["data"])}
+    return {}
+
+
+# B6/B7 (ADR-024/ADR-026): LLM_MIDDLEWARE = [circuit_breaker (outer), retry (inner)].
+# PIIMiddleware and SummarizationMiddleware added in T035/B7.
+_text_agent = create_agent(base_llm, list(ALL_TOOLS), system_prompt=SYSTEM_PROMPT, middleware=LLM_MIDDLEWARE)
+
+# B5 (ADR-028): same create_agent pattern for audio; gpt-audio returns audio bytes
+# in additional_kwargs["audio"]["data"] which extract_audio_response unpacks.
+_audio_agent = create_agent(audio_llm, list(ALL_TOOLS), system_prompt=SYSTEM_PROMPT, middleware=LLM_MIDDLEWARE)
+
 builder = StateGraph(AgendAIState)
 
 builder.add_node("detect_input_type", detect_input_type)
-builder.add_node("chat_with_llm", chat_with_llm)
-builder.add_node("execute_tools", tool_node)
-builder.add_node("process_tool_results", process_tool_results)
+builder.add_node("text_agent", _text_agent)
+builder.add_node("process_text_results", process_tool_results)
+builder.add_node("audio_agent", _audio_agent)
+builder.add_node("process_audio_results", process_tool_results)
+builder.add_node("extract_audio_response", extract_audio_response)
 builder.add_node("send_email", send_email)
 
 builder.add_edge(START, "detect_input_type")
-builder.add_edge("detect_input_type", "chat_with_llm")
 builder.add_conditional_edges(
-    "chat_with_llm",
-    route_after_llm,
-    {"execute_tools": "execute_tools", "send_email": "send_email", END: END},
+    "detect_input_type",
+    route_by_input_type,
+    {"text_agent": "text_agent", "audio_agent": "audio_agent"},
 )
-builder.add_edge("execute_tools", "process_tool_results")
-builder.add_edge("process_tool_results", "chat_with_llm")
+
+# Text path
+builder.add_edge("text_agent", "process_text_results")
+builder.add_conditional_edges(
+    "process_text_results",
+    route_after_agent,
+    {"send_email": "send_email", END: END},
+)
+
+# Audio path
+builder.add_edge("audio_agent", "process_audio_results")
+builder.add_edge("process_audio_results", "extract_audio_response")
+builder.add_conditional_edges(
+    "extract_audio_response",
+    route_after_agent,
+    {"send_email": "send_email", END: END},
+)
+
 builder.add_edge("send_email", END)
 
 # B4 (ADR-025): Redis cache backend. Nodes opt-in via CachePolicy — none configured
 # yet (execute_tools mixes stable + dynamic tools; safe split deferred to a future batch).
-graph = builder.compile(cache=build_cache())
+#
+# recursion_limit: hard cycle guard. Each node execution counts as 1 step.
+# A normal scheduling flow uses ~8 steps; 25 allows ~10 LLM+tool rounds
+# before GraphRecursionError fires — far above any legitimate use case.
+_MAX_GRAPH_STEPS = 25
+graph = builder.compile(cache=build_cache()).with_config({"recursion_limit": _MAX_GRAPH_STEPS})

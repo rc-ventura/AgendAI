@@ -1,16 +1,4 @@
-import base64
-import openai
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, AIMessage, ToolMessage
-
-from agent.state import AgendAIState
-from agent.nodes.tools import ALL_TOOLS
-from agent.resilience import (
-    CircuitOpenError,
-    invoke_with_resilience,
-    PT_BR_UNAVAILABLE,
-    RETRYABLE_EXCEPTIONS,
-)
 
 SYSTEM_PROMPT = """Você é AgendAI, assistente de agendamento médico da Clínica Saúde.
 
@@ -35,10 +23,10 @@ Regras de negócio:
    - Após o paciente confirmar o horário desejado, chame criar_agendamento IMEDIATAMENTE
      sem pedir re-confirmação adicional."""
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2).bind_tools(ALL_TOOLS, parallel_tool_calls=True)
+base_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
 
-# B5 (ADR-028): gpt-audio para sessões de voz — entende áudio e gera
-# áudio diretamente, eliminando transcriber.py e tts.py.
+# B5 (ADR-028): gpt-audio handles transcription + synthesis in a single API call,
+# eliminating the separate transcriber.py and tts.py nodes.
 audio_llm = ChatOpenAI(
     model="gpt-audio",
     temperature=0.2,
@@ -46,57 +34,4 @@ audio_llm = ChatOpenAI(
         "modalities": ["text", "audio"],
         "audio": {"voice": "alloy", "format": "mp3"},
     },
-).bind_tools(ALL_TOOLS, parallel_tool_calls=True)
-
-
-def _sanitize_messages(messages: list) -> list:
-    """Remove orphaned ToolMessages that lack a preceding AIMessage with matching tool_calls.
-
-    Protects against corrupt thread state where add_messages dedup replaced an AIMessage
-    with tool_calls but left its corresponding ToolMessage in place, which causes OpenAI
-    to reject the sequence with a 400 error.
-    """
-    valid_tool_call_ids: set[str] = set()
-    result = []
-    for msg in messages:
-        if isinstance(msg, AIMessage):
-            tcs = getattr(msg, "tool_calls", None) or []
-            valid_tool_call_ids = {tc["id"] for tc in tcs}
-            result.append(msg)
-        elif isinstance(msg, ToolMessage):
-            if msg.tool_call_id in valid_tool_call_ids:
-                valid_tool_call_ids.discard(msg.tool_call_id)
-                result.append(msg)
-            # orphaned tool message — drop silently
-        else:
-            valid_tool_call_ids = set()
-            result.append(msg)
-    return result
-
-
-async def chat_with_llm(state: AgendAIState) -> dict:
-    sanitized = _sanitize_messages(list(state["messages"]))
-    messages = [SystemMessage(content=SYSTEM_PROMPT)] + sanitized
-
-    try:
-        if state.get("input_type") == "audio":
-            response = await invoke_with_resilience(audio_llm, messages)
-            # opção simples: sempre pede audio; extrai quando não há tool calls
-            if not getattr(response, "tool_calls", None):
-                audio_info = response.additional_kwargs.get("audio", {})
-                if audio_info and "data" in audio_info:
-                    return {
-                        "messages": [response],
-                        "final_response": base64.b64decode(audio_info["data"]),
-                    }
-            return {"messages": [response]}
-
-        response = await invoke_with_resilience(llm, messages)
-        return {"messages": [response]}
-
-    except CircuitOpenError:
-        unavailable = AIMessage(content=PT_BR_UNAVAILABLE)
-        return {"messages": [unavailable]}
-    except (openai.APIConnectionError, openai.APITimeoutError, openai.RateLimitError):
-        unavailable = AIMessage(content=PT_BR_UNAVAILABLE)
-        return {"messages": [unavailable]}
+)

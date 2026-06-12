@@ -12,13 +12,9 @@ import time
 
 import httpx
 import openai
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-
+from langchain.agents.middleware import AgentMiddleware, ModelRetryMiddleware, ToolRetryMiddleware
+from langchain_core.messages import AIMessage
 logger = logging.getLogger(__name__)
-
-
-class CircuitOpenError(Exception):
-    """Raised by CircuitBreaker.call_async when the circuit is open."""
 
 
 class CircuitBreaker:
@@ -53,63 +49,8 @@ class CircuitBreaker:
             return 0.0
         return max(0.0, self._reset_timeout - (time.monotonic() - self._opened_at))
 
-    async def call_async(self, func, *args, **kwargs):
-        if self.is_open:
-            logger.warning(
-                "circuit_breaker=blocked remaining=%.1fs",
-                self._seconds_remaining(),
-            )
-            raise CircuitOpenError()
-        try:
-            result = await func(*args, **kwargs)
-            if self._fails > 0:
-                logger.info("circuit_breaker=closed")
-            self._fails = 0
-            self._opened_at = None
-            return result
-        except Exception:
-            self._fails += 1
-            if self._fails >= self._fail_max:
-                self._opened_at = time.monotonic()
-                logger.warning(
-                    "circuit_breaker=open fails=%d reset_in=%.0fs",
-                    self._fails,
-                    self._reset_timeout,
-                )
-            raise
 
-
-# Singleton used by llm_core — also importable by future AgentMiddleware.
 llm_breaker = CircuitBreaker(fail_max=3, reset_timeout=30)
-
-# Tenacity retry — async-safe because _base_invoke is async def.
-_RETRYABLE = retry_if_exception_type((
-    openai.APIConnectionError,
-    openai.APITimeoutError,
-    openai.RateLimitError,
-))
-
-
-async def _base_invoke(llm_instance, messages):
-    return await llm_instance.ainvoke(messages)
-
-
-retried_invoke = retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=_RETRYABLE,
-    reraise=True,
-)(_base_invoke)
-
-
-async def invoke_with_resilience(llm_instance, messages):
-    """Call llm_instance.ainvoke with retry + circuit breaker.
-
-    Retries up to 3× on transient OpenAI errors (connection, timeout, rate limit).
-    After 3 consecutive call failures the circuit opens for 30s and raises
-    CircuitOpenError — callers should return a graceful fallback message.
-    """
-    return await llm_breaker.call_async(retried_invoke, llm_instance, messages)
 
 
 PT_BR_UNAVAILABLE = (
@@ -117,17 +58,76 @@ PT_BR_UNAVAILABLE = (
     "Por favor, tente novamente em alguns instantes."
 )
 
-# HTTP retry — for calls from api_client to the REST API internal.
-http_retry = retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=8),
-    retry=retry_if_exception_type((httpx.ConnectError, httpx.TimeoutException)),
-    reraise=True,
-)
-
-# Exports public — retryable exceptions for external use.
-RETRYABLE_EXCEPTIONS = (
+# Retryable exception groups — used by both middleware instances.
+RETRYABLE_LLM_EXCEPTIONS = (
     openai.APIConnectionError,
     openai.APITimeoutError,
     openai.RateLimitError,
 )
+RETRYABLE_HTTP_EXCEPTIONS = (httpx.ConnectError, httpx.TimeoutException)
+
+# Keep public alias for backwards-compatibility with existing imports.
+RETRYABLE_EXCEPTIONS = RETRYABLE_LLM_EXCEPTIONS
+
+# ── LLM middleware stack (used by create_agent in graph.py) ───────────────────
+
+
+class LLMCircuitBreakerMiddleware(AgentMiddleware):
+    """Circuit breaker for LLM calls inside create_agent.
+
+    Pairs with ModelRetryMiddleware (inner) so the circuit counts complete
+    retry sequences, not individual attempts. On open circuit returns a
+    pt-BR fallback AIMessage so create_agent exits its loop gracefully.
+    """
+
+    async def awrap_model_call(self, request, handler) -> AIMessage:
+        if llm_breaker.is_open:
+            logger.warning("circuit_breaker=blocked remaining=%.1fs", llm_breaker._seconds_remaining())
+            return AIMessage(content=PT_BR_UNAVAILABLE)
+        try:
+            response = await handler(request)
+            if llm_breaker._fails > 0:
+                logger.info("circuit_breaker=closed")
+            llm_breaker._fails = 0
+            llm_breaker._opened_at = None
+            return response
+        except (openai.APIConnectionError, openai.APITimeoutError, openai.RateLimitError):
+            llm_breaker._fails += 1
+            if llm_breaker._fails >= llm_breaker._fail_max:
+                llm_breaker._opened_at = time.monotonic()
+                logger.warning(
+                    "circuit_breaker=open fails=%d reset_in=%.0fs",
+                    llm_breaker._fails,
+                    llm_breaker._reset_timeout,
+                )
+            return AIMessage(content=PT_BR_UNAVAILABLE)
+
+
+# LLM retry: 3 total attempts, re-raise on exhaustion so the outer circuit
+# breaker can count the complete failure sequence.
+_llm_retry_middleware = ModelRetryMiddleware(
+    max_retries=2,
+    retry_on=RETRYABLE_LLM_EXCEPTIONS,
+    on_failure="error",
+    initial_delay=2.0,
+    backoff_factor=2.0,
+    jitter=False,
+)
+
+# Tool retry: retries REST API transport failures (connect / timeout).
+# on_failure="continue" returns a ToolMessage with the error so the LLM can
+# recover gracefully instead of crashing the graph.
+_tool_retry_middleware = ToolRetryMiddleware(
+    max_retries=2,
+    retry_on=RETRYABLE_HTTP_EXCEPTIONS,
+    on_failure="continue",
+    initial_delay=1.0,
+    backoff_factor=2.0,
+    jitter=False,
+)
+
+# Module-level instance — exported so tests can call .awrap_model_call() directly.
+llm_circuit_breaker_middleware = LLMCircuitBreakerMiddleware()
+
+# Ready-to-use middleware list for create_agent — outermost first.
+LLM_MIDDLEWARE = [llm_circuit_breaker_middleware, _llm_retry_middleware, _tool_retry_middleware]

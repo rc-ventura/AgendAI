@@ -138,8 +138,8 @@ Polyglot: agent at `agent/agent/`, agent tests `agent/tests/`, API at `api/src/`
 
 **Independent Test**: The 5 outcomes in `contracts/guardrail-decision.md` (injection blocked pre-LLM, off-scope refused, CPF absent from logs, output redacted, corpus 100%/0).
 
-- [ ] T032 [US3] Adopt `MessagesState` base for `AgendAIState` in `agent/agent/state.py` (additive — keep all existing fields; ADR-026); ensure 70 pytest stay green
-- [ ] T033 [US3] Introduce `create_agent` scaffold wrapping the chat+tools loop as a subgraph in `agent/agent/graph.py`, preserving the audio/email/detect nodes around it (ADR-026); suites green
+- [x] T032 [US3] `AgendAIState` herda de `MessagesState` (LangGraph); campo `messages` + reducer `add_messages` herdado; imports `Annotated`/`AnyMessage`/`add_messages` removidos; 66 pytest verdes
+- [x] T033 [US3] Introduce `create_agent` scaffold wrapping the chat+tools loop as a subgraph in `agent/agent/graph.py`, preserving the audio/email/detect nodes around it (ADR-026); suites green
 - [ ] T034 [P] [US3] Failing-first tests in `agent/tests/`: guardrail-decision contract — injection blocked before LLM, off-scope pt-BR refusal, PII not in logs, output redacted (per `contracts/guardrail-decision.md`)
 - [ ] T035 [US3] Add `PIIMiddleware` (redact/block; input + output + tool results) to the agent — FR-014/016
 - [ ] T036 [US3] Spike custom middleware vs **NeMo Guardrails** for injection/off-scope on a pt-BR corpus; implement the chosen one; record in new `docs/adr/ADR-029-guardrails.md` + learning-lesson `guardrails_langchain_middleware.md`

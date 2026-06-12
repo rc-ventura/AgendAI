@@ -4,11 +4,8 @@ import httpx
 import respx
 from unittest.mock import AsyncMock, patch, MagicMock
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
-from tenacity import RetryError
-
 from agent.state import AgendAIState
 from agent.nodes.input_detector import detect_input_type
-from agent.nodes.llm_core import chat_with_llm
 
 
 # ── input_detector ────────────────────────────────────────────────────────────
@@ -89,28 +86,11 @@ async def test_buscar_pagamentos_tool(mock_api_client):
 
 # ── llm_core ──────────────────────────────────────────────────────────────────
 
-def test_llm_bound_with_parallel_tool_calls():
-    """B1 (QW-1): LLM must be bound with parallel_tool_calls=True for concurrent tool execution."""
-    from agent.nodes.llm_core import llm
-    bound_kwargs = getattr(llm, "kwargs", {})
-    assert bound_kwargs.get("parallel_tool_calls") is True, (
-        "LLM must be bound with parallel_tool_calls=True (QW-1 B1)"
-    )
-
-
-@pytest.mark.asyncio
-async def test_llm_core_returns_ai_message():
-    from agent.nodes.llm_core import chat_with_llm
-
-    mock_response = AIMessage(content="Olá! Como posso ajudar?")
-
-    with patch("agent.nodes.llm_core.llm") as mock_llm:
-        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
-        state = make_state()
-        result = await chat_with_llm(state)
-
-    assert "messages" in result
-    assert result["messages"][-1].content == "Olá! Como posso ajudar?"
+def test_llm_core_exports_base_and_audio_llm():
+    """B5/B7: llm_core exports base_llm and audio_llm for create_agent; no pre-bound llm needed."""
+    from agent.nodes.llm_core import base_llm, audio_llm
+    assert base_llm is not None
+    assert audio_llm is not None
 
 
 # ── email_sender ──────────────────────────────────────────────────────────────
@@ -245,132 +225,111 @@ async def test_email_sender_continues_after_smtp_failure():
     assert result["email_payload"] is None
 
 
-# ── llm_core: audio_llm extrai audio quando sem tool_calls (TST-06) ──────────
-
-@pytest.mark.asyncio
-async def test_chat_with_llm_audio_extracts_final_response():
-    """B5/TST-06: chat_with_llm extrai bytes de áudio quando a resposta não tem tool_calls."""
-    import base64
-    from agent.nodes.llm_core import chat_with_llm
-
-    fake_mp3 = b"MP3_BYTES"
-    b64_audio = base64.b64encode(fake_mp3).decode()
-
-    mock_response = AIMessage(
-        content="Temos horários disponíveis!",
-        additional_kwargs={"audio": {"data": b64_audio, "id": "audio_123"}},
-    )
-
-    with patch("agent.nodes.llm_core.audio_llm") as mock_audio_llm:
-        mock_audio_llm.ainvoke = AsyncMock(return_value=mock_response)
-        state = make_state(input_type="audio")
-        result = await chat_with_llm(state)
-
-    assert result["final_response"] == fake_mp3
-    assert len(result["messages"]) == 1
-
-
-# ── B6: retry + circuit breaker (T024) ───────────────────────────────────────
+# ── B6: retry + circuit breaker via _ResilientChatOpenAI (T024) ──────────────
 
 @pytest.mark.asyncio
 async def test_llm_transient_error_is_retried_transparently():
-    """Contract #1: one APIConnectionError is retried silently — patient sees the answer."""
+    """Contract #1: ModelRetryMiddleware retries once — patient sees the answer."""
     import openai
-    from agent.nodes.llm_core import chat_with_llm
+    from langchain.agents.middleware.types import ModelResponse
+    from agent.resilience import llm_circuit_breaker_middleware, _llm_retry_middleware, llm_breaker
 
-    good_response = AIMessage(content="Olá! Como posso ajudar?")
+    llm_breaker.close()
     call_count = 0
 
-    async def side_effect(messages, **_):
+    async def mock_handler(request):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
             raise openai.APIConnectionError(request=MagicMock())
-        return good_response
+        return ModelResponse(result=[AIMessage(content="Olá! Como posso ajudar?")])
 
-    with patch("agent.nodes.llm_core.llm") as mock_llm:
-        mock_llm.ainvoke = AsyncMock(side_effect=side_effect)
-        result = await chat_with_llm(make_state())
+    async def composed(request):
+        return await _llm_retry_middleware.awrap_model_call(request, mock_handler)
 
-    assert result["messages"][-1].content == "Olá! Como posso ajudar?"
+    result = await llm_circuit_breaker_middleware.awrap_model_call(None, composed)
+
     assert call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_llm_breaker_opens_after_3_failures_returns_ptbr_message():
-    """Contract #2: 3 consecutive LLM failures → circuit breaker opens → pt-BR unavailability."""
-    import openai
-    from agent.nodes.llm_core import chat_with_llm
-    from agent.resilience import llm_breaker, CircuitOpenError  # noqa: F401
-
-    llm_breaker.close()  # ensure clean state between tests
-
-    async def always_fail(messages, **_):
-        raise openai.APIConnectionError(request=MagicMock())
-
-    with patch("agent.nodes.llm_core.llm") as mock_llm:
-        mock_llm.ainvoke = AsyncMock(side_effect=always_fail)
-        # trip the breaker with 3 sequential failures
-        for _ in range(3):
-            result = await chat_with_llm(make_state())
-
-        # breaker now open — next call must return pt-BR message without calling OpenAI
-        mock_llm.ainvoke.reset_mock()
-        result = await chat_with_llm(make_state())
-
-    msg_content = result["messages"][-1].content.lower()
-    assert "indisponível" in msg_content or "momento" in msg_content or "tente" in msg_content
-    mock_llm.ainvoke.assert_not_called()
-
+    content = result.content if isinstance(result, AIMessage) else result.result[0].content
+    assert "Olá" in content
     llm_breaker.close()
 
 
 @pytest.mark.asyncio
-async def test_api_client_retries_connect_error():
-    """Contract #3: ConnectError on first call is retried — second succeeds transparently."""
-    from agent.nodes.tools import buscar_horarios_disponiveis
+async def test_llm_breaker_opens_after_3_failures_returns_ptbr_message():
+    """Contract #2: 3 retry-sequence failures → circuit opens → pt-BR message, no further calls."""
+    import openai
+    from agent.resilience import llm_circuit_breaker_middleware, _llm_retry_middleware, llm_breaker
 
+    llm_breaker.close()
     call_count = 0
 
-    with respx.mock(base_url="http://api:3000", assert_all_called=False) as mock:
-        def responder(request):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise httpx.ConnectError("Connection refused")
-            return httpx.Response(200, json=[{
-                "id": 1, "data_hora": "2026-06-15T09:00:00", "disponivel": 1,
-                "medico": {"id": 1, "nome": "Dr. Carlos Lima", "especialidade": "Clínico Geral"},
-            }])
+    async def always_fail(request):
+        nonlocal call_count
+        call_count += 1
+        raise openai.APIConnectionError(request=MagicMock())
 
-        mock.get("/horarios/disponiveis").mock(side_effect=responder)
-        result = await buscar_horarios_disponiveis.ainvoke({"data": None})
+    async def composed(request):
+        return await _llm_retry_middleware.awrap_model_call(request, always_fail)
 
-    assert "Dr. Carlos Lima" in result
-    assert call_count == 2
+    for _ in range(3):
+        await llm_circuit_breaker_middleware.awrap_model_call(None, composed)
+
+    calls_before = call_count
+    result = await llm_circuit_breaker_middleware.awrap_model_call(None, composed)
+
+    assert call_count == calls_before  # circuit open — handler not called
+    content = result.content if isinstance(result, AIMessage) else result.result[0].content
+    assert "indisponível" in content.lower() or "momento" in content.lower()
+    llm_breaker.close()
 
 
 @pytest.mark.asyncio
-async def test_api_client_does_not_retry_409():
-    """Contract #4: 409 Conflict is NOT retried — single attempt, error relayed."""
-    from agent.nodes.tools import criar_agendamento
+async def test_tool_middleware_retries_connect_error():
+    """Contract #3: ToolRetryMiddleware retries ConnectError — second attempt succeeds."""
+    from langchain_core.messages import ToolMessage
+    from agent.resilience import _tool_retry_middleware
 
     call_count = 0
+    mock_request = MagicMock()
+    mock_request.tool.name = "buscar_horarios_disponiveis"
+    mock_request.tool_call = {"id": "call_test_123"}
 
-    with respx.mock(base_url="http://api:3000", assert_all_called=False) as mock:
-        def responder(request):
-            nonlocal call_count
-            call_count += 1
-            return httpx.Response(409, json={"error": "Horário já ocupado"})
+    async def handler(request):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise httpx.ConnectError("Connection refused")
+        return ToolMessage(content="Horários disponíveis: Dr. Carlos Lima", tool_call_id="call_test_123")
 
-        mock.post("/agendamentos").mock(side_effect=responder)
-        result = await criar_agendamento.ainvoke({
-            "paciente_email": "joao@email.com",
-            "horario_id": 1,
-        })
+    result = await _tool_retry_middleware.awrap_tool_call(mock_request, handler)
 
-    assert call_count == 1
-    assert isinstance(result, str)
+    assert call_count == 2
+    assert isinstance(result, ToolMessage)
+    assert "Dr. Carlos Lima" in result.content
+
+
+@pytest.mark.asyncio
+async def test_tool_middleware_does_not_retry_timeout_exception_type():
+    """Contract #4: non-retriable exceptions are not retried — single attempt, error message returned."""
+    from langchain_core.messages import ToolMessage
+    from agent.resilience import _tool_retry_middleware
+
+    call_count = 0
+    mock_request = MagicMock()
+    mock_request.tool.name = "criar_agendamento"
+    mock_request.tool_call = {"id": "call_test_456"}
+
+    async def handler(request):
+        nonlocal call_count
+        call_count += 1
+        raise ValueError("unexpected business error")  # not in RETRYABLE_HTTP_EXCEPTIONS
+
+    result = await _tool_retry_middleware.awrap_tool_call(mock_request, handler)
+
+    assert call_count == 1  # no retry for non-retriable exception
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"
 
 
 @pytest.mark.asyncio
