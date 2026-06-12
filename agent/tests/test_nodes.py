@@ -333,6 +333,67 @@ async def test_tool_middleware_does_not_retry_timeout_exception_type():
 
 
 @pytest.mark.asyncio
+async def test_api_circuit_breaker_fast_fails_when_open():
+    """Contract #6: API CB open → ToolMessage returned immediately, handler not called."""
+    from langchain_core.messages import ToolMessage
+    from agent.resilience import api_circuit_breaker_middleware, api_breaker
+
+    api_breaker.close()
+    api_breaker._fails = api_breaker._fail_max
+    api_breaker._opened_at = __import__("time").monotonic()
+
+    call_count = 0
+    mock_request = MagicMock()
+    mock_request.tool.name = "buscar_horarios_disponiveis"
+    mock_request.tool_call = {"id": "call_cb_1"}
+
+    async def handler(request):
+        nonlocal call_count
+        call_count += 1
+        return ToolMessage(content="ok", tool_call_id="call_cb_1")
+
+    result = await api_circuit_breaker_middleware.awrap_tool_call(mock_request, handler)
+
+    assert call_count == 0
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"
+    assert "indisponível" in result.content.lower()
+    api_breaker.close()
+
+
+@pytest.mark.asyncio
+async def test_api_circuit_breaker_opens_after_3_transport_failures():
+    """Contract #7: 3 ConnectErrors → circuit opens → subsequent call fast-fails."""
+    from langchain_core.messages import ToolMessage
+    from agent.resilience import api_circuit_breaker_middleware, api_breaker
+
+    api_breaker.close()
+    call_count = 0
+    mock_request = MagicMock()
+    mock_request.tool.name = "buscar_horarios_disponiveis"
+    mock_request.tool_call = {"id": "call_cb_2"}
+
+    async def always_fail(request):
+        nonlocal call_count
+        call_count += 1
+        raise httpx.ConnectError("Connection refused")
+
+    for _ in range(3):
+        try:
+            await api_circuit_breaker_middleware.awrap_tool_call(mock_request, always_fail)
+        except httpx.ConnectError:
+            pass
+
+    calls_before = call_count
+    result = await api_circuit_breaker_middleware.awrap_tool_call(mock_request, always_fail)
+
+    assert call_count == calls_before  # circuit open — handler not called
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"
+    api_breaker.close()
+
+
+@pytest.mark.asyncio
 async def test_email_sender_no_duplicate_on_smtp_retry():
     """Contract #5 (FR-006): a retry around SMTP must not send duplicate emails.
     _send_smtp is called exactly once per send_email invocation — tenacity retries

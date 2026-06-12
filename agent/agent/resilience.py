@@ -13,7 +13,8 @@ import time
 import httpx
 import openai
 from langchain.agents.middleware import AgentMiddleware, ModelRetryMiddleware, ToolRetryMiddleware
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
+
 logger = logging.getLogger(__name__)
 
 
@@ -51,10 +52,14 @@ class CircuitBreaker:
 
 
 llm_breaker = CircuitBreaker(fail_max=3, reset_timeout=30)
-
+api_breaker = CircuitBreaker(fail_max=3, reset_timeout=30)
 
 PT_BR_UNAVAILABLE = (
     "Desculpe, o assistente está temporariamente indisponível. "
+    "Por favor, tente novamente em alguns instantes."
+)
+PT_BR_API_UNAVAILABLE = (
+    "Serviço de agendamento temporariamente indisponível. "
     "Por favor, tente novamente em alguns instantes."
 )
 
@@ -126,8 +131,51 @@ _tool_retry_middleware = ToolRetryMiddleware(
     jitter=False,
 )
 
-# Module-level instance — exported so tests can call .awrap_model_call() directly.
+class APICircuitBreakerMiddleware(AgentMiddleware):
+    """Circuit breaker for REST API tool calls inside create_agent.
+
+    Sits inner to ToolRetryMiddleware so each individual retry attempt
+    is counted. After fail_max=3 transport failures the circuit opens:
+    awrap_tool_call returns a pt-BR ToolMessage immediately — ToolRetryMiddleware
+    (outer) sees a successful return and stops retrying, achieving fast-fail.
+    """
+
+    async def awrap_tool_call(self, request, handler) -> ToolMessage:
+        tool_name = request.tool.name if request.tool else request.tool_call["name"]
+        tool_call_id = request.tool_call.get("id")
+
+        if api_breaker.is_open:
+            logger.warning("api_circuit_breaker=blocked remaining=%.1fs", api_breaker._seconds_remaining())
+            return ToolMessage(content=PT_BR_API_UNAVAILABLE, tool_call_id=tool_call_id, name=tool_name, status="error")
+        try:
+            result = await handler(request)
+            if api_breaker._fails > 0:
+                logger.info("api_circuit_breaker=closed")
+            api_breaker._fails = 0
+            api_breaker._opened_at = None
+            return result
+        except (httpx.ConnectError, httpx.TimeoutException):
+            api_breaker._fails += 1
+            if api_breaker._fails >= api_breaker._fail_max:
+                api_breaker._opened_at = time.monotonic()
+                logger.warning(
+                    "api_circuit_breaker=open fails=%d reset_in=%.0fs",
+                    api_breaker._fails,
+                    api_breaker._reset_timeout,
+                )
+            raise  # ToolRetryMiddleware (outer) handles the retry
+
+
+# Module-level instances — exported so tests can call hooks directly.
 llm_circuit_breaker_middleware = LLMCircuitBreakerMiddleware()
+api_circuit_breaker_middleware = APICircuitBreakerMiddleware()
 
 # Ready-to-use middleware list for create_agent — outermost first.
-LLM_MIDDLEWARE = [llm_circuit_breaker_middleware, _llm_retry_middleware, _tool_retry_middleware]
+# Model call chain:  llm_cb (outer) → llm_retry (inner) → LLM
+# Tool call chain:   tool_retry (outer) → api_cb (inner) → tool_fn
+LLM_MIDDLEWARE = [
+    llm_circuit_breaker_middleware,
+    _llm_retry_middleware,
+    _tool_retry_middleware,
+    api_circuit_breaker_middleware,
+]
