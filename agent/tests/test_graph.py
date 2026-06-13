@@ -1,6 +1,8 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.language_models.chat_models import BaseChatModel
+from langgraph.checkpoint.memory import MemorySaver
 
 from agent.state import AgendAIState
 
@@ -10,6 +12,7 @@ def make_state(**kwargs) -> AgendAIState:
         "messages": [],
         "input_type": "text",
         "audio_data": None,
+        "audio_format": None,
         "session_id": "test-graph",
         "email_pending": False,
         "email_payload": None,
@@ -19,15 +22,67 @@ def make_state(**kwargs) -> AgendAIState:
     return base
 
 
+
+def test_bff_route_handler_sets_durability_exit():
+    """B3 (QW-3): durability='exit' must be enforced server-side in the Next.js BFF
+    Route Handler, not in browser UI code (ADR-025 B3, SC-006)."""
+    import pathlib
+    root = pathlib.Path(__file__).parent.parent.parent
+
+    route_handler = root / "agent-ui-pro/src/app/api/[..._path]/route.ts"
+    assert route_handler.exists(), (
+        "BFF Route Handler must exist at agent-ui-pro/src/app/api/[..._path]/route.ts"
+    )
+    content = route_handler.read_text()
+    assert 'durability' in content, (
+        "Route Handler must inject durability (QW-3 B3)"
+    )
+    assert "bodyParameters" in content, (
+        "Route Handler must use bodyParameters — the official LangGraph BFF pattern"
+    )
+
+    # durability must NOT appear in browser-side components or hooks
+    for browser_file in [
+        root / "agent-ui-pro/src/components/thread/index.tsx",
+        root / "agent-ui-pro/src/providers/Stream.tsx",
+    ]:
+        assert 'durability' not in browser_file.read_text(), (
+            f"durability must not appear in browser code {browser_file.name} "
+            "(set server-side in BFF Route Handler only)"
+        )
+
+
+def test_audio_llm_uses_audio_preview_model():
+    """B5 (ADR-028): audio_llm must use gpt-4o-audio-preview — no new infra, same OPENAI_API_KEY."""
+    from agent.nodes.llm_core import audio_llm
+
+    # ChatOpenAI wraps model name in different attrs depending on version
+    model_name = getattr(audio_llm, "model_name", None) or getattr(
+        getattr(audio_llm, "bound", None), "model_name", None
+    ) or ""
+    assert "audio" in model_name, (
+        f"audio_llm must use a gpt-audio model (ADR-028 B5), got: {model_name!r}"
+    )
+
+
+def test_system_prompt_directs_parallel_lookup():
+    """B2 (QW-4): Prompt must instruct simultaneous buscar_horarios + buscar_paciente
+    in round 1 to drive the scheduling flow down to ≤2 LLM rounds."""
+    from agent.nodes.llm_core import SYSTEM_PROMPT
+    lower = SYSTEM_PROMPT.lower()
+    assert "simultane" in lower or "ao mesmo tempo" in lower, (
+        "SYSTEM_PROMPT must instruct simultaneous tool lookups in round 1 (QW-4 B2)"
+    )
+
+
 @pytest.mark.asyncio
 async def test_text_query_reaches_llm(mock_api_client):
-    """US1: text message flows through detect_input_type → chat_with_llm"""
+    """US1: text message flows through detect_input_type → text_agent (create_agent)"""
     from agent.graph import graph
 
     mock_ai_response = AIMessage(content="Aqui estão os horários disponíveis!")
 
-    with patch("agent.nodes.llm_core.llm") as mock_llm:
-        mock_llm.ainvoke = AsyncMock(return_value=mock_ai_response)
+    with patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_ai_response)):
         state = make_state(messages=[HumanMessage(content="Quais horários?")])
         result = await graph.ainvoke(state, config={"configurable": {"thread_id": "test-1"}})
 
@@ -45,9 +100,8 @@ async def test_email_pending_triggers_send_email(mock_api_client):
     # Simulate LLM returning a final answer after tools already set email_pending
     mock_final_response = AIMessage(content="Consulta agendada com sucesso!")
 
-    with patch("agent.nodes.llm_core.llm") as mock_llm, \
+    with patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_final_response)), \
          patch("agent.nodes.email_sender._send_smtp") as mock_smtp:
-        mock_llm.ainvoke = AsyncMock(return_value=mock_final_response)
         mock_smtp.return_value = None
 
         state = make_state(
@@ -69,25 +123,22 @@ async def test_email_pending_triggers_send_email(mock_api_client):
 
 
 @pytest.mark.asyncio
-async def test_audio_path_calls_transcriber_and_tts():
-    """US4: audio input → transcribe → llm → synthesize_tts"""
+async def test_audio_path_uses_audio_llm_and_sets_final_response():
+    """US4 / B5: audio_data → detect_input_type builds input_audio msg → audio_agent
+    (create_agent with gpt-audio) runs loop → extract_audio_response unpacks bytes.
+    No transcriber.py or tts.py needed (ADR-028)."""
+    import base64
     from agent.graph import graph
 
-    mock_ai_response = AIMessage(content="Temos horários disponíveis!")
-    fake_audio_out = b"MP3_OUTPUT"
+    fake_mp3 = b"MP3_OUTPUT"
+    b64_audio = base64.b64encode(fake_mp3).decode()
 
-    with patch("agent.nodes.llm_core.llm") as mock_llm, \
-         patch("agent.nodes.transcriber.openai_client") as mock_stt, \
-         patch("agent.nodes.tts.openai_client") as mock_tts_client:
+    mock_audio_response = AIMessage(
+        content="Temos horários disponíveis!",
+        additional_kwargs={"audio": {"data": b64_audio, "id": "audio_x"}},
+    )
 
-        mock_llm.ainvoke = AsyncMock(return_value=mock_ai_response)
-        mock_stt.audio.transcriptions.create = AsyncMock(
-            return_value=MagicMock(text="Quais horários disponíveis?")
-        )
-        mock_response = MagicMock()
-        mock_response.read = MagicMock(return_value=fake_audio_out)
-        mock_tts_client.audio.speech.create = AsyncMock(return_value=mock_response)
-
+    with patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_audio_response)):
         state = make_state(
             messages=[],
             input_type="audio",
@@ -96,7 +147,48 @@ async def test_audio_path_calls_transcriber_and_tts():
         result = await graph.ainvoke(state, config={"configurable": {"thread_id": "test-3"}})
 
     assert result["input_type"] == "audio"
-    assert result["final_response"] == fake_audio_out
+    assert result["final_response"] == fake_mp3
+
+
+def _has_input_audio_part(msg) -> bool:
+    content = getattr(msg, "content", None)
+    return isinstance(content, list) and any(
+        isinstance(p, dict) and p.get("type") == "input_audio" for p in content
+    )
+
+
+@pytest.mark.asyncio
+async def test_audio_blob_stripped_after_consumption():
+    """B10-D: after the audio turn, the input_audio base64 blob must NOT remain in
+    message history (Constitution VII: transient data must not persist beyond the
+    consuming node). extract_audio_response replaces it with a text placeholder."""
+    import base64
+    from agent.graph import graph
+
+    fake_mp3 = b"MP3_OUTPUT"
+    b64_audio = base64.b64encode(fake_mp3).decode()
+
+    mock_audio_response = AIMessage(
+        content="Temos horários disponíveis!",
+        additional_kwargs={"audio": {"data": b64_audio, "id": "audio_x"}},
+    )
+
+    with patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_audio_response)):
+        state = make_state(
+            messages=[],
+            input_type="audio",
+            audio_data=b"FAKE_AUDIO_INPUT",
+        )
+        result = await graph.ainvoke(state, config={"configurable": {"thread_id": "strip-audio-1"}})
+
+    assert not any(_has_input_audio_part(m) for m in result["messages"]), (
+        "input_audio blob must be stripped from message history after the audio turn"
+    )
+    # the human turn is still present as a text placeholder
+    assert any(
+        isinstance(m, HumanMessage) and m.content == "[mensagem de voz]"
+        for m in result["messages"]
+    ), "consumed audio message must be replaced by a text placeholder"
 
 
 @pytest.mark.asyncio
@@ -107,7 +199,7 @@ async def test_full_scheduling_flow_us2(mock_api_client):
 
     call_count = 0
 
-    async def llm_side_effect(messages, **kwargs):
+    async def llm_side_effect(*args, **kwargs):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -128,9 +220,8 @@ async def test_full_scheduling_flow_us2(mock_api_client):
         # Round 3+: final confirmation
         return AIMessage(content="Consulta agendada com sucesso para o Dr. Carlos Lima!")
 
-    with patch("agent.nodes.llm_core.llm") as mock_llm, \
+    with patch.object(BaseChatModel, "ainvoke", AsyncMock(side_effect=llm_side_effect)), \
          patch("agent.nodes.email_sender._send_smtp") as mock_smtp:
-        mock_llm.ainvoke = AsyncMock(side_effect=llm_side_effect)
         mock_smtp.return_value = None
 
         state = make_state(messages=[HumanMessage(content="Quero agendar uma consulta para joao@email.com")])
@@ -149,7 +240,7 @@ async def test_cancellation_flow_us3(mock_api_client):
 
     call_count = 0
 
-    async def llm_side_effect(messages, **kwargs):
+    async def llm_side_effect(*args, **kwargs):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -159,9 +250,8 @@ async def test_cancellation_flow_us3(mock_api_client):
             )
         return AIMessage(content="Seu agendamento foi cancelado com sucesso.")
 
-    with patch("agent.nodes.llm_core.llm") as mock_llm, \
+    with patch.object(BaseChatModel, "ainvoke", AsyncMock(side_effect=llm_side_effect)), \
          patch("agent.nodes.email_sender._send_smtp") as mock_smtp:
-        mock_llm.ainvoke = AsyncMock(side_effect=llm_side_effect)
         mock_smtp.return_value = None
 
         state = make_state(messages=[HumanMessage(content="Cancele meu agendamento 1 para joao@email.com")])
@@ -181,8 +271,7 @@ async def test_run_id_present_for_langsmith():
 
     mock_ai_response = AIMessage(content="Olá!")
 
-    with patch("agent.nodes.llm_core.llm") as mock_llm:
-        mock_llm.ainvoke = AsyncMock(return_value=mock_ai_response)
+    with patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_ai_response)):
         state = make_state(messages=[HumanMessage(content="Oi")])
         config = RunnableConfig(
             run_name="test_langsmith_trace",
@@ -192,3 +281,56 @@ async def test_run_id_present_for_langsmith():
         result = await graph.ainvoke(state, config=config)
 
     assert result is not None
+
+
+# ── B10-C: CountingCheckpointer (T054 / T058) ─────────────────────────────────
+
+class CountingCheckpointer(MemorySaver):
+    """Wraps MemorySaver, counting every put call — used to verify bounded checkpoint writes.
+
+    With durability='async' (default, unit test level) LangGraph writes once per superstep.
+    The test asserts writes are active (≥1) and bounded (≤ N_MAX), proving the checkpointing
+    mechanism is healthy. The BFF static test covers durability='exit' at the server level.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.put_count = 0
+
+    def put(self, *args, **kwargs):
+        self.put_count += 1
+        return super().put(*args, **kwargs)
+
+    async def aput(self, *args, **kwargs):
+        self.put_count += 1
+        return await super().aput(*args, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_writes_are_bounded(mock_api_client):
+    """B10-C (HIGH-02 QA fix): runtime validation that checkpoint writes are active and bounded
+    per graph run. Complements test_bff_route_handler_sets_durability_exit (static check) with
+    an actual write-count assertion (contracts/observability.md HIGH-02, research.md R6)."""
+    from agent.graph import builder
+
+    checkpointer = CountingCheckpointer()
+    test_g = builder.compile(checkpointer=checkpointer)
+
+    mock_response = AIMessage(content="Aqui estão os horários disponíveis!")
+
+    with patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_response)):
+        state = make_state(messages=[HumanMessage(content="Quais horários?")])
+        await test_g.ainvoke(state, config={"configurable": {"thread_id": "b10c-test-1"}})
+
+    # (a) checkpointing is active — at least one write happened (recovery is possible)
+    assert checkpointer.put_count >= 1, (
+        f"Expected ≥1 checkpoint write, got {checkpointer.put_count} — checkpointer may not be active"
+    )
+    # (b) writes are bounded — text path has 3 top-level nodes; create_agent is a compiled
+    # subgraph whose internal supersteps each write to the parent checkpointer. N_MAX equals
+    # the graph's recursion_limit (60) — any run that writes more has a loop bug.
+    N_MAX = 60
+    assert checkpointer.put_count <= N_MAX, (
+        f"Expected ≤{N_MAX} checkpoint writes per run, got {checkpointer.put_count} — "
+        "possible unbounded loop (recursion_limit=60 is the hard ceiling)"
+    )

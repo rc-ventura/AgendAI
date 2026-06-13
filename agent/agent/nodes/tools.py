@@ -31,8 +31,14 @@ async def criar_agendamento(paciente_email: str, horario_id: int) -> str:
     Use após o paciente confirmar o horário desejado.
     Requer e-mail cadastrado do paciente e ID do horário (obtido de buscar_horarios_disponiveis).
     """
+    import httpx
     client = get_client()
-    result = await client.criar_agendamento(paciente_email, horario_id)
+    try:
+        result = await client.criar_agendamento(paciente_email, horario_id)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 409:
+            return "Horário indisponível: esse horário já foi reservado. Por favor, escolha outro."
+        raise
     dt = result["horario"]["data_hora"].replace("T", " ")
     return json.dumps({
         "sucesso": True,

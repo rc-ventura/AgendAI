@@ -1,43 +1,40 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Latest change: 1.0.0 → 1.1.0 (2026-06-01)
-Bump rationale (MINOR): Added a new first-class principle (VI. Security & Data Protection)
-and clarified the name of Principle II to surface that it already mandates TDD. No principle
-was removed or redefined incompatibly, so this is a MINOR bump.
+Latest change: 1.1.0 → 1.2.0 (2026-06-11)
+Bump rationale (MINOR): Added Principle VII — LangGraph Agent Design, codifying the
+non-negotiable structural and operational constraints for the LangGraph agent component,
+derived from the LangGraph Best Practices playbook (swarnendu.de/blog/langgraph-best-practices)
+and validated against the AgendAI production architecture. No existing principle was
+removed or redefined incompatibly.
 
 This amendment:
-  - RENAMED  Principle II: "Test-First with Real DB" → "Test-First (TDD) with Real DB"
-             (name-only clarification; the body already mandated the red-green cycle).
-  - ADDED    Principle VI: Security & Data Protection (PII protection, single trusted
-             boundary, fail-closed auth, least exposure, secrets, input validation, deps).
+  - ADDED    Principle VII: LangGraph Agent Design (state design, cycle guards, node
+             purity, three-layer resilience, observability, deployment, thread identity).
 
 History:
-  - 1.0.0 (2026-06-01): First formal ratification. Converted the placeholder template into
-    the adopted constitution, codifying the five de-facto principles referenced by the
-    Constitution Check sections of features 003 and 004.
+  - 1.0.0 (2026-06-01): First formal ratification.
+  - 1.1.0 (2026-06-01): Added Principle VI — Security & Data Protection.
+  - 1.2.0 (2026-06-11): Added Principle VII — LangGraph Agent Design.
 
 Principles (current set):
-  I.   Layered Architecture
-  II.  Test-First (TDD) with Real DB (NON-NEGOTIABLE)
-  III. Stateless Services via Dependency Injection
-  IV.  Observability & Cache Consistency
-  V.   Simplicity & Minimal Abstraction
-  VI.  Security & Data Protection
+  I.    Layered Architecture
+  II.   Test-First (TDD) with Real DB (NON-NEGOTIABLE)
+  III.  Stateless Services via Dependency Injection
+  IV.   Observability & Cache Consistency
+  V.    Simplicity & Minimal Abstraction
+  VI.   Security & Data Protection
+  VII.  LangGraph Agent Design
 
 Sections: Technology & Architecture Constraints; Development Workflow & Quality Gates;
 Governance (all filled; no template placeholders remain).
 
 Templates / artifacts reviewed for consistency:
-  ✅ .specify/templates/plan-template.md  — "Constitution Check" gate references the
-       constitution generically; it now covers 6 principles automatically; no edit needed.
+  ✅ .specify/templates/plan-template.md  — "Constitution Check" references the constitution
+       generically; covers all seven principles automatically; no edit needed.
   ✅ .specify/templates/spec-template.md  — no mandatory section added/removed; no edit.
-  ✅ .specify/templates/tasks-template.md — task categories accommodate security/testing/
-       observability tasks; no edit needed.
-  ✅ specs/004-fase-1-deploy/plan.md       — Constitution Check updated to add a Security
-       row (already compliant: single public edge, fail-closed auth, secrets externalized).
-  ✅ specs/003-professional-chat-ui/plan.md — pre-existing table reflects v1.0.0 principle
-       names; acceptable as a historical record (frontend-only feature, security N/A).
+  ✅ .specify/templates/tasks-template.md — task categories accommodate agent design tasks;
+       no edit needed.
 
 Deferred / TODO: none. RATIFICATION_DATE unchanged (2026-06-01).
 -->
@@ -152,6 +149,69 @@ primary design constraint, not an afterthought.
 if mishandled. Fail-closed auth, a single audited entry point, and disciplined secret/PII
 handling are the minimum bar for handling patient data responsibly.
 
+### VII. LangGraph Agent Design
+
+The LangGraph agent MUST follow these structural and operational constraints in every node,
+edge, and state definition.
+
+**State design:**
+- State MUST be defined as `TypedDict` (or Pydantic), minimal, and fully typed. Reducers
+  (`add_messages`, `operator.add`) MUST be used only where accumulation is semantically
+  required — not as a default.
+- Transient data (binary payloads, audio bytes, intermediate buffers) MUST NOT be persisted
+  in graph state beyond the node that consumes them. Pass through function scope or clear the
+  field immediately after use to avoid bloating Postgres checkpoints.
+- State fields coming from external sources MUST be validated at the node boundary before
+  being acted upon.
+
+**Graph flow:**
+- Every cycle in the graph MUST have a hard exit condition — a `step_count` or `error_count`
+  field with a `max_steps` guard in the routing function. Unbounded cycles are prohibited.
+- Use simple edges for linear steps; conditional edges only at genuine decision points.
+  Routing functions MUST return string literals that exactly match the edge map keys — typos
+  cause silent misroutes and are treated as bugs.
+- Parallelism inside the graph MUST use the `Send` API (node fan-out) or `parallel_tool_calls`
+  (LLM-level). Ad-hoc `asyncio.gather` inside a single node is permitted only for truly
+  independent calls with no state side effects.
+
+**Resilience — three layers (innermost to outermost):**
+1. **Call-level** (`agent/resilience.py`): transient failures on external calls (OpenAI,
+   REST API) MUST be retried with exponential backoff via tenacity. All retry and circuit
+   breaker logic MUST live in `agent/resilience.py` — not inline in node functions.
+2. **Circuit breaker**: after N consecutive failures, the circuit MUST open and return a
+   pt-BR user message immediately. The breaker MUST emit structured log events on state
+   transitions (`circuit_breaker=open/blocked/closed`).
+3. **Node-level** (`RetryPolicy` + `error_handler`): for node timeouts and Saga compensation
+   (Spec 006+). `error_handler` is the correct place for compensating transactions — not
+   bare `try/except` inside node functions.
+
+**Observability:**
+- Circuit breaker state transitions MUST emit structured log events visible in
+  `docker compose logs langgraph-server` and captured by LangSmith traces.
+- Agent runs MUST be traceable via LangSmith when `LANGSMITH_TRACING=true` is set.
+- Selected edges, tool payloads (sanitized), retries, and run outcomes MUST be loggable
+  without leaking PII (see Principle VI).
+
+**Deployment:**
+- The compiled graph MUST NOT embed a checkpointer — persistence is injected by the
+  LangGraph Server runtime at startup. Embedding a checkpointer would break the managed
+  server's Postgres-backed persistence.
+- `stream_mode="updates"` MUST be the default for UI consumption (bandwidth-efficient).
+  `stream_mode="messages"` is reserved for token-level streaming UX only.
+
+**Thread identity:**
+- Every invocation MUST carry a meaningful `thread_id`. When multi-tenancy is introduced
+  (Spec 006+), keys MUST be namespaced: `tenant-{id}:user-{id}:session-{id}`.
+
+**Rationale**: These constraints prevent the most common LangGraph production failures:
+unbounded loops exhausting tokens and time, transient data bloating checkpoints, resilience
+logic scattered across nodes (making it untestable), and silent routing bugs from mismatched
+edge strings. The three-layer resilience model (call → circuit breaker → node) ensures
+coverage at every failure granularity without duplication.
+
+*Reference*: LangGraph Best Practices (swarnendu.de) · ADR-024 (retry/resilience) ·
+`docs/learning-lessons/fault_tolerance_tres_camadas.md` · `docs/learning-lessons/circuit_breaker_custom_vs_libs.md`
+
 ## Technology & Architecture Constraints
 
 - **Components & stacks** (MUST remain the canonical stack unless amended):
@@ -172,7 +232,7 @@ handling are the minimum bar for handling patient data responsibly.
 
 - **Spec-Kit flow**: Features proceed through `/speckit-specify → /speckit-plan →
   /speckit-tasks → /speckit-analyze → /speckit-implement`. Each `plan.md` MUST include a
-  Constitution Check that evaluates all five principles before and after design.
+  Constitution Check that evaluates all seven principles before and after design.
 - **CI as deploy gate**: Merges to `main` require the full API + agent suites green (branch
   protection enforced). Deployment to production happens only from a passing `main`.
 - **Review**: Changes land via pull request. Reviewers MUST verify constitution compliance and
@@ -196,4 +256,4 @@ handling are the minimum bar for handling patient data responsibly.
 - **Compliance** is verified at planning time (the plan's Constitution Check) and at review
   time (PR review). Repeated, unjustified deviations are treated as defects to be remediated.
 
-**Version**: 1.1.0 | **Ratified**: 2026-06-01 | **Last Amended**: 2026-06-01
+**Version**: 1.2.0 | **Ratified**: 2026-06-01 | **Last Amended**: 2026-06-11

@@ -4,7 +4,7 @@ function createHorariosService({ horariosRepo }) {
   async function listarDisponiveis(data) {
     const cacheKey = data ? `horarios:${data}` : 'horarios';
 
-    const cached = cache.get(cacheKey);
+    const cached = await cache.get(cacheKey);
     if (cached) return cached;
 
     const rows = data
@@ -22,7 +22,7 @@ function createHorariosService({ horariosRepo }) {
       },
     }));
 
-    cache.set(cacheKey, result);
+    await cache.set(cacheKey, result);
     return result;
   }
 
