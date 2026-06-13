@@ -344,7 +344,35 @@ de `app.listen`.
 "connection terminated/refused". `AbortError` em todos os outros erros — constraint violations
 (23xxx), auth, e erros de negócio não são retentados.
 
-Todos os métodos de `repositories/*.js` encapsulam `pool.query` em `withDbRetry`.
+Todos os métodos de `api/src/repositories/*.js` encapsulam `pool.query` em `withDbRetry`.
+
+### Nuance: retry dentro de transação é inócuo (não corrigido — decisão consciente)
+
+Os métodos de repositório recebem um `exec` que é **ou** o `pool` (autocommit) **ou** o `client`
+de uma transação (`api/src/services/agendamentosService.js:23-44` passa `client` como `exec` para
+`claimIfAvailable` e `create`). O `withDbRetry` envolve a query nos dois casos.
+
+- **Query no `pool` (autocommit):** cada query é isolada — retentar resolve um blip transiente de
+  conexão. É aqui que o retry agrega valor (ex.: `api/src/services/agendamentosService.js:50`,
+  pós-commit no pool).
+- **Query no `client` (transação):** se uma query falha dentro de um `BEGIN`, o Postgres aborta a
+  transação inteira; a re-tentativa no mesmo `client` recebe `"current transaction is aborted"` —
+  que **não** casa com `TRANSIENT_CODES` em `api/src/db/withRetry.js:7`, então `isTransient` retorna
+  `false` e dispara `AbortError` imediatamente. O retry **nunca ajuda** dentro de transação.
+
+**Por que NÃO foi corrigido:**
+1. **Sem dano:** o `catch` do serviço faz `ROLLBACK` (`api/src/services/agendamentosService.js:40`,
+   `:84`) — sem corrupção de dados, com ou sem o retry fútil.
+2. **Custo mínimo:** no pior caso ~200ms (um ciclo de backoff `minTimeout`) antes do `AbortError`,
+   e só no caminho de erro (raro) de uma query de transação que já falhou.
+3. **Fix não é trivial como parece:** `withDbRetry` (`api/src/db/withRetry.js`) hoje não conhece o
+   `pool`. Pular o retry quando `exec !== pool` exigiria mudar a assinatura de `withDbRetry` e tocar
+   **todos** os call sites em `api/src/repositories/*.js` — refatoração transversal por um ganho de
+   latência marginal num não-bug. Risco de regressão > benefício.
+
+**Se um dia a latência importar:** detectar `exec !== pool` em `withDbRetry` e pular o retry nesse
+caso (um `if`), passando `exec` + referência do pool para a função. Documentado como upgrade path,
+não aplicado agora.
 
 ### Desvio: async-retry → p-retry
 
