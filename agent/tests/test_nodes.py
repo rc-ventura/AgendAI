@@ -234,6 +234,60 @@ def test_detect_input_audio_creates_human_message_with_content_part():
     assert decoded == b"fake_audio_bytes"
 
 
+# ── B10-D: audio blob strip (agent/agent/nodes/audio.py) ─────────────────────
+
+def _audio_msg(msg_id: str | None = "audio_1") -> HumanMessage:
+    return HumanMessage(
+        id=msg_id,
+        content=[{"type": "input_audio", "input_audio": {"data": "Zm9v", "format": "wav"}}],
+    )
+
+
+def test_is_input_audio_message_detects_audio_part():
+    """is_input_audio_message must recognise a HumanMessage with an input_audio part."""
+    from agent.nodes.audio import is_input_audio_message
+    assert is_input_audio_message(_audio_msg()) is True
+
+
+def test_is_input_audio_message_rejects_plain_text():
+    """Plain-text HumanMessage and AIMessage must not be flagged as input_audio."""
+    from agent.nodes.audio import is_input_audio_message
+    assert is_input_audio_message(HumanMessage(content="Olá")) is False
+    assert is_input_audio_message(AIMessage(content="Oi")) is False
+
+
+def test_strip_consumed_audio_replaces_with_text_placeholder():
+    """strip_consumed_audio must re-emit each audio message as a text placeholder
+    reusing the SAME id (so add_messages updates in-place, dropping the blob)."""
+    from agent.nodes.audio import strip_consumed_audio
+
+    state = make_state(messages=[_audio_msg("audio_1"), AIMessage(content="resposta")])
+    replacements = strip_consumed_audio(state)
+
+    assert len(replacements) == 1
+    repl = replacements[0]
+    assert isinstance(repl, HumanMessage)
+    assert repl.id == "audio_1"  # same id → in-place update
+    assert repl.content == "[mensagem de voz]"
+
+
+def test_strip_consumed_audio_noop_without_audio():
+    """No input_audio messages → no replacements."""
+    from agent.nodes.audio import strip_consumed_audio
+
+    state = make_state(messages=[HumanMessage(content="Olá"), AIMessage(content="Oi")])
+    assert strip_consumed_audio(state) == []
+
+
+def test_strip_consumed_audio_skips_audio_message_without_id():
+    """An audio message with no id cannot be updated in-place — it is skipped
+    (add_messages would append a duplicate instead of replacing)."""
+    from agent.nodes.audio import strip_consumed_audio
+
+    state = make_state(messages=[_audio_msg(msg_id=None)])
+    assert strip_consumed_audio(state) == []
+
+
 # ── tools: API degradation (TST-03) ───────────────────────────────────────────
 
 @pytest.mark.asyncio

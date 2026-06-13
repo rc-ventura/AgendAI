@@ -15,6 +15,7 @@ from agent.nodes.llm_core import base_llm, audio_llm, SYSTEM_PROMPT
 from agent.nodes.tools import ALL_TOOLS
 from agent.nodes.email_sender import send_email
 from agent.nodes.tool_result_processor import process_tool_results
+from agent.nodes.audio import strip_consumed_audio
 
 
 def route_by_input_type(state: AgendAIState) -> Literal["text_agent", "audio_agent"]:
@@ -28,16 +29,24 @@ def route_after_agent(state: AgendAIState) -> Literal["send_email", "__end__"]:
 
 
 def extract_audio_response(state: AgendAIState) -> dict:
-    """Extracts audio bytes from the final AIMessage after the audio_agent loop exits."""
+    """Extracts audio bytes from the final AIMessage after the audio_agent loop exits,
+    then strips the consumed input_audio blob from message history."""
+    stripped = strip_consumed_audio(state)
+    update: dict = {}
+    if stripped:
+        update["messages"] = stripped
+
     for msg in reversed(state["messages"]):
         audio_info = getattr(msg, "additional_kwargs", {}).get("audio", {})
         if audio_info and "data" in audio_info:
-            return {"final_response": base64.b64decode(audio_info["data"])}
+            update["final_response"] = base64.b64decode(audio_info["data"])
+            return update
+
     logger.warning(
         "extract_audio_response: no audio data found in %d messages; final_response will be None",
         len(state["messages"]),
     )
-    return {}
+    return update
 
 
 _text_agent = create_agent(base_llm, list(ALL_TOOLS), system_prompt=SYSTEM_PROMPT, middleware=LLM_MIDDLEWARE)

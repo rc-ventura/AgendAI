@@ -150,6 +150,47 @@ async def test_audio_path_uses_audio_llm_and_sets_final_response():
     assert result["final_response"] == fake_mp3
 
 
+def _has_input_audio_part(msg) -> bool:
+    content = getattr(msg, "content", None)
+    return isinstance(content, list) and any(
+        isinstance(p, dict) and p.get("type") == "input_audio" for p in content
+    )
+
+
+@pytest.mark.asyncio
+async def test_audio_blob_stripped_after_consumption():
+    """B10-D: after the audio turn, the input_audio base64 blob must NOT remain in
+    message history (Constitution VII: transient data must not persist beyond the
+    consuming node). extract_audio_response replaces it with a text placeholder."""
+    import base64
+    from agent.graph import graph
+
+    fake_mp3 = b"MP3_OUTPUT"
+    b64_audio = base64.b64encode(fake_mp3).decode()
+
+    mock_audio_response = AIMessage(
+        content="Temos horários disponíveis!",
+        additional_kwargs={"audio": {"data": b64_audio, "id": "audio_x"}},
+    )
+
+    with patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_audio_response)):
+        state = make_state(
+            messages=[],
+            input_type="audio",
+            audio_data=b"FAKE_AUDIO_INPUT",
+        )
+        result = await graph.ainvoke(state, config={"configurable": {"thread_id": "strip-audio-1"}})
+
+    assert not any(_has_input_audio_part(m) for m in result["messages"]), (
+        "input_audio blob must be stripped from message history after the audio turn"
+    )
+    # the human turn is still present as a text placeholder
+    assert any(
+        isinstance(m, HumanMessage) and m.content == "[mensagem de voz]"
+        for m in result["messages"]
+    ), "consumed audio message must be replaced by a text placeholder"
+
+
 @pytest.mark.asyncio
 async def test_full_scheduling_flow_us2(mock_api_client):
     """TST-02 — US2: text → buscar_horarios → criar_agendamento → confirm + email sent."""
