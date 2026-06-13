@@ -72,7 +72,7 @@ validados como percentuais concretos. As métricas abaixo são comparadas após 
 | Audio output size | 87–171 kB | 77–177 kB | varia com conteúdo da resposta |
 
 > **Destaques**:
-> - `durability=exit` reduz P50 texto em **−53%** (2.56s → 1.21s) — efeito direto de eliminar 29 writes Postgres desnecessários por turno
+> - `durability=exit` apresentou P50 texto menor (1.21s vs 2.56s), mas **N=3 é insuficiente para isolar a causa**: o modo `async` escreve checkpoints em background sem bloquear o grafo (docs LangGraph), portanto a diferença não é explicada por "writes bloqueando supersteps". O run outlier de 7.25s no async provavelmente reflete variância da API OpenAI. Candidatos reais: contenção do event loop com 30 co-rotinas de write concorrentes, ou pura variância de LLM. Precisaria de N≥20 para conclusão robusta.
 > - Latência de áudio (~4s) é dominada pelo `gpt-4o-audio-preview` (geração de speech), não pelo checkpoint
 > - Pipeline B5 confirmado: 3/3 runs retornaram bytes MP3 válidos em ambos os modos
 > - Audio runs espaçados 10s para respeitar o RPM limite do `gpt-4o-audio-preview`
