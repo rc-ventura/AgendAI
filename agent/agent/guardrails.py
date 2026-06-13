@@ -135,7 +135,7 @@ class InjectionGuardMiddleware(AgentMiddleware):
                     last_human_text = _extract_str_content(msg.content)
                     break
         except Exception:
-            pass
+            logger.warning("guardrail=extraction_failed", exc_info=True)
 
         if last_human_text and _is_injection(last_human_text):
             logger.warning("guardrail=injection_blocked")

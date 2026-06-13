@@ -108,6 +108,38 @@ async def test_legitimate_scheduling_not_blocked():
     assert "Horários" in result.content
 
 
+# ── 1b. Extraction failure path (fail-open + logged) ──────────────────────────
+
+@pytest.mark.asyncio
+async def test_extraction_failure_is_logged_and_fails_open(caplog):
+    """If message extraction raises, the guard logs a warning and falls open
+    (calls the handler) rather than crashing — see agent/agent/guardrails.py."""
+    from agent.guardrails import InjectionGuardMiddleware
+
+    mw = InjectionGuardMiddleware()
+    call_count = 0
+
+    async def handler(request):
+        nonlocal call_count
+        call_count += 1
+        return AIMessage(content="reached handler")
+
+    # request.messages raises when iterated/accessed
+    bad_request = MagicMock()
+    type(bad_request).messages = property(
+        lambda self: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = await mw.awrap_model_call(bad_request, handler)
+
+    assert call_count == 1, "guard must fall open (call handler) on extraction failure"
+    assert result.content == "reached handler"
+    assert "guardrail=extraction_failed" in caplog.text, (
+        "extraction failure must be logged, not silently swallowed"
+    )
+
+
 # ── 2. Off-scope guard ────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

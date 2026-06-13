@@ -205,6 +205,81 @@ per Constitution V e pelo fato de que o corpus de ataque já é bem definido.
 
 ---
 
+## Comportamento em falha de extração (fail-open, deliberado)
+
+O `InjectionGuardMiddleware.awrap_model_call` (`agent/agent/guardrails.py:129-148`) extrai o
+texto da última `HumanMessage` dentro de um `try/except`. Se essa extração lançar exceção, o
+guard **loga** `guardrail=extraction_failed` (`agent/agent/guardrails.py:137-138`, antes era um
+`pass` silencioso) e **segue fail-open** — `last_human_text` permanece `""`, os dois `if` de
+verificação (`agent/agent/guardrails.py:140` e `:144`) são pulados, e o request vai ao LLM **sem
+checagem de guardrail**.
+
+**Decisão: manter fail-open.** Avaliamos a alternativa fail-closed (recusar quando não é possível
+inspecionar o input) e a descartamos para este domínio porque:
+
+1. O atacante controla o **conteúdo de texto** da mensagem, não a **estrutura** do objeto
+   `request.messages` (montada internamente pelo `create_agent`/LangChain). `_extract_str_content`
+   (`agent/agent/guardrails.py:101-108`) é defensivo (trata `str`, `list`, fallback `str(content)`),
+   então uma exceção real de extração é praticamente sempre uma **regressão de API** (mudança no
+   `ModelRequest` numa atualização do LangChain), não um exploit.
+2. O log `exc_info=True` torna qualquer quebra **visível** em vez de silenciosa — é o principal
+   ganho deste ajuste, sem mudar a postura de segurança.
+3. Clínica é domínio de acesso controlado; o `SYSTEM_PROMPT` é o backstop semântico (ver abaixo).
+
+**Importante — por que NÃO basta "fail-closed quando `last_human_text == ''`":** a mesma condição
+de texto vazio cobre dois casos distintos. Um fail-closed ingênuo sobre o texto vazio bloquearia
+**100% das mensagens de voz** (ver a lacuna de áudio abaixo) e quebraria o produto. Por isso, se
+algum dia for adotado fail-closed, ele deve disparar **apenas** no ramo `except` (extração lançou),
+nunca no caso legítimo de texto extraído vazio. Teste de regressão do caminho de exceção:
+`test_extraction_failure_is_logged_and_fails_open` em `agent/tests/test_guardrails.py`.
+
+---
+
+## Limitação — o canal de áudio NÃO passa pelos guardrails de injection/off-scope
+
+**Fato:** mensagens de voz contornam completamente o regex de injection (`agent/agent/guardrails.py:56-73`)
+e off-scope (`agent/agent/guardrails.py:77-85`). Isso é por design da pipeline, não um bug pontual.
+
+**Por quê (cadeia de execução):**
+
+1. `detect_input_type` (`agent/agent/nodes/input_detector.py:17-20`) converte o áudio em uma
+   `HumanMessage` com content part `input_audio` — um blob base64, **sem** chave `"text"`.
+2. O `InjectionGuardMiddleware` roda **dentro** do `audio_agent` (via `LLM_MIDDLEWARE`,
+   `agent/agent/middleware.py`). Ao processar essa mensagem, `_extract_str_content`
+   (`agent/agent/guardrails.py:101-108`) percorre a lista e faz `p.get("text", "")` em cada item;
+   o dict de áudio não tem `"text"`, então retorna `""`.
+3. Com `last_human_text == ""`, as condições em `agent/agent/guardrails.py:140` e `:144` são falsas
+   → `handler(request)` é chamado **sem checagem**. Todo turno de voz passa batido.
+
+**O placeholder `"[mensagem de voz]"` NÃO fecha essa lacuna.** O `strip_consumed_audio`
+(`agent/agent/nodes/audio.py`) só roda em `extract_audio_response` (`agent/agent/graph.py`),
+**depois** que o `audio_agent` já consumiu o áudio e o guard já rodou. Além disso, o placeholder é
+um rótulo genérico — **não** contém as palavras faladas (o B5/ADR-028 removeu o Whisper). Logo, nem
+no turno corrente (guard vê o blob) nem em turnos seguintes (guard vê o rótulo inócuo) há texto de
+voz para o regex inspecionar.
+
+**Eficácia duvidosa mesmo se transcrevêssemos:** um ataque falado raramente casaria com padrões
+textuais exatos (`ignore previous instructions`, etc.) — fala tem hesitação, sotaque, sem pontuação.
+O regex determinístico tem baixo retorno para voz de qualquer forma.
+
+**Mitigação atual (única camada para voz): o `SYSTEM_PROMPT`.** O `audio_llm`
+(`agent/agent/nodes/llm_core.py:30-37`) recebe o mesmo `SYSTEM_PROMPT` (`agent/agent/nodes/llm_core.py:3-24`),
+cujo bloco "IDENTIDADE E LIMITES (não negociáveis)" (`agent/agent/nodes/llm_core.py:5-10`) instrui o
+modelo a recusar redefinição de identidade, ignorar instruções embutidas e redirecionar para
+agendamento. Para o canal de texto o prompt é a **segunda** camada (regex é a primeira); para o
+canal de áudio ele é a **única** camada.
+
+**Decisão: aceitar a lacuna.** Áudio passa pelos guardrails determinísticos sem bloqueio; o
+`SYSTEM_PROMPT` é o backstop. Coerente com o domínio de acesso controlado. Fechar a lacuna exigiria
+ou (a) transcrever o áudio antes do `audio_agent` — reintroduzindo Whisper e revertendo o ganho de
+latência do B5/ADR-028 — ou (b) adotar o guard semântico (Caminho 2 acima), que entende intenção e
+funcionaria para voz. Ambos ficam para o futuro.
+
+**Condição de revisão:** se a clínica abrir para público geral, ou se monitoramento mostrar abuso
+pelo canal de voz, priorizar o Caminho 2 (semântico) — que cobre voz e texto de uma vez.
+
+---
+
 ## Relação com outras decisões
 
 - **ADR-026**: `SecurityMiddleware` é middleware do `create_agent` — arquitetura confirmada.
