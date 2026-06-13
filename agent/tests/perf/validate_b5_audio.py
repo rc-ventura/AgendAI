@@ -13,11 +13,12 @@ import io
 
 from langgraph_sdk import get_client
 
-API_URL = "http://127.0.0.1:8123"
+API_URL = os.environ.get("LANGGRAPH_API_URL", "http://localhost:8080")
 AUTH_TOKEN = os.environ.get("LANGGRAPH_AUTH_TOKEN", "")
 GRAPH_ID = "agendai_agent"
 N_RUNS = 3
-AUDIO_DELAY_S = 8  # gpt-audio has lower RPM limits — pause between runs
+AUDIO_DELAY_S = 10  # gpt-audio has lower RPM limits — pause between runs
+TEXT_DELAY_S = 4    # nginx rate limit: 20r/min burst=10 — space text runs ≥4s
 
 
 def make_sine_wav(duration_s: float = 1.5, freq: float = 440.0, sample_rate: int = 16000) -> bytes:
@@ -96,6 +97,8 @@ async def main():
     print("\n[1] durability=async (default) — B5 only")
     text_times_async, audio_times_async, audio_ok_async = [], [], 0
     for i in range(N_RUNS):
+        if i > 0:
+            await asyncio.sleep(TEXT_DELAY_S)
         thread = await client.threads.create()
         t, content = await run_text_query(client, thread["thread_id"], durability_exit=False)
         text_times_async.append(t)
@@ -118,6 +121,8 @@ async def main():
     print("\n[2] durability=exit (B3+B5 combined — single checkpoint per turn)")
     text_times_exit, audio_times_exit, audio_ok_exit = [], [], 0
     for i in range(N_RUNS):
+        if i > 0:
+            await asyncio.sleep(TEXT_DELAY_S)
         thread = await client.threads.create()
         t, content = await run_text_query(client, thread["thread_id"], durability_exit=True)
         text_times_exit.append(t)

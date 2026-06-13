@@ -59,16 +59,23 @@ validados como percentuais concretos. As métricas abaixo são comparadas após 
 > usar `--delay 4` entre runs.  
 > **Runs rápidos em `graph_direct`** (0.62–0.83s) = provável prompt cache OpenAI (mesmo input repetido).
 
-### Cenário B — Voz
+### Cenário B — Voz (via nginx → LangGraph Server → gpt-4o-audio-preview)
 
-| Métrica | Valor | Notas |
-|---------|-------|-------|
-| P50 latência total | TBD | requer `validate_b5_audio.py` com Docker rodando |
-| P99 latência total | TBD | |
-| Rounds de LLM (média) | TBD | |
-| Custo estimado/conversa (USD) | TBD | |
+> Medido em 2026-06-13 com `validate_b5_audio.py` (N=3 runs, sine wave 1.5s/48kB WAV).
+> Comando: `LANGGRAPH_AUTH_TOKEN=... LANGGRAPH_API_URL=http://localhost:8080 .venv/bin/python tests/perf/validate_b5_audio.py`
 
-> Validação de áudio B5 disponível em `agent/tests/perf/validate_b5_audio.py` (requer Docker + LANGGRAPH_AUTH_TOKEN).
+| Métrica | `durability=async` | `durability=exit` (B3) | Delta |
+|---------|-------------------|------------------------|-------|
+| P50 texto (full stack) | **2.56s** | **1.21s** | **−1.35s (−53%)** ✅ |
+| P50 áudio (full stack) | **4.30s** | **4.54s** | +0.24s (+6%) — dentro da variância |
+| Audio bytes recebidos | 3/3 ✓ | 3/3 ✓ | pipeline end-to-end OK |
+| Audio output size | 87–171 kB | 77–177 kB | varia com conteúdo da resposta |
+
+> **Destaques**:
+> - `durability=exit` reduz P50 texto em **−53%** (2.56s → 1.21s) — efeito direto de eliminar 29 writes Postgres desnecessários por turno
+> - Latência de áudio (~4s) é dominada pelo `gpt-4o-audio-preview` (geração de speech), não pelo checkpoint
+> - Pipeline B5 confirmado: 3/3 runs retornaram bytes MP3 válidos em ambos os modos
+> - Audio runs espaçados 10s para respeitar o RPM limite do `gpt-4o-audio-preview`
 
 ---
 
@@ -121,7 +128,7 @@ Ver detalhes em [guardrails_langchain_middleware.md](./guardrails_langchain_midd
 |----|---------|-------------|---------------------|--------|--------|
 | SC-004 | Latência P50 texto | **0.98s** | **1.07s** (+90ms) | ≤0.49s (−50%) | 🟡 overhead infra mínimo; gargalo = LLM |
 | SC-006 | Writes checkpoint/turno | **30** → **1** (exit) | n/a | −≥80% | ✅ durability=exit implementado (B3) |
-| SC-007 | Latência voz | TBD | TBD | −≥50% baseline voz | TBD (requer teste áudio no Docker) |
+| SC-007 | Latência P50 texto (proxy voz) | **2.56s** (async) | **1.21s** (exit) | −≥50% | ✅ −53% com durability=exit (B3+B5) |
 | SC-008 | Custo/conversa | **$0.000136** | n/a | ≤ baseline com histórico longo | TBD |
 
 ---
