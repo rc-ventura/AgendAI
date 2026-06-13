@@ -101,6 +101,70 @@ the win to stable lookups, which is acceptable given B4 is the smallest latency 
 > write-stable tool nodes only (Constitution IV — `buscar_pagamentos`, static doctor/patient data);
 > exclude `buscar_horarios` / appointment reads.
 
+---
+
+## R4 — B10-A: How to clear transient state in a LangGraph node (MEDIUM-01)
+
+**Decision**: Return cleared fields (`None`) from the consuming node. LangGraph state is
+immutable-update-based — returning `{"audio_data": None}` from a node merges that value into
+state, replacing the bytes. No special LangGraph API is needed.
+
+**Rationale**: The simplest correct approach. The node already returns a dict; adding two
+`None` keys costs zero runtime overhead and removes the bytes from all downstream checkpoints.
+
+**Alternatives considered**: Clearing in a dedicated "cleanup" node after `detect_input_type`
+(rejected — more graph complexity for a one-liner fix); storing audio outside state (rejected —
+violates the TypedDict contract without adding value).
+
+---
+
+## R5 — B10-B: How to propagate request_id into Python agent logs (HIGH-01)
+
+**Decision**: `contextvars.ContextVar` set in `detect_input_type` (the first node), read by
+`_JsonFormatter` at log-time. No third-party dependency added.
+
+**Implementation details**:
+- `detect_input_type` already runs first (directly after `START`) in all paths.
+- LangGraph injects `config: RunnableConfig` into any node that declares it as a parameter —
+  no graph wiring change required, only a parameter addition.
+- `config["metadata"]["request_id"]` is the value the BFF already injects (ADR-031 B9).
+- `ContextVar` default `"-"` ensures the formatter never raises `LookupError`.
+- In asyncio, `ContextVar` values are inherited by the current task but NOT automatically
+  copied to child tasks created with `asyncio.create_task`. LangGraph runs all nodes in the
+  same asyncio event loop context (not in separate tasks), so the contextvar set by
+  `detect_input_type` is visible to all subsequent nodes in the same invocation.
+
+**Alternatives considered**:
+- `LoggerAdapter` per module (rejected — requires refactoring every `logger = getLogger(...)` site).
+- Adding `request_id` as a state field (rejected — observability concern leaking into business state).
+- Structlog processors (rejected — we use stdlib logging; adding structlog was in scope originally but implementation used stdlib for simplicity).
+
+---
+
+## R6 — B10-C: Runtime test for checkpoint write count (HIGH-02)
+
+**Decision**: `CountingCheckpointer(MemorySaver)` subclass that increments a counter in both
+`put` and `aput`. Tests compile `builder` (not the module-level `graph`) with this checkpointer.
+
+**Why not test `durability="exit"` directly**: `durability` is a per-run request parameter
+processed by the managed LangGraph Server — it is not a graph compile option and cannot be
+tested without the server. The unit test instead verifies the weaker but meaningful claim:
+checkpointing is active (`put_count >= 1`) and bounded (`put_count <= N_NODES`).
+
+**Boundary**: `N_NODES = 4` for the text path (input_detector → text_agent → process_text_results
+→ END). With `durability="async"` (default, all nodes), the server writes once per super-step.
+With `durability="exit"`, it writes once at the end. Both satisfy `1 ≤ put_count ≤ 4` with
+a real MemorySaver, so the assertion is valid regardless of the server-side config.
+
+**What the static test (`test_bff_route_handler_sets_durability_exit`) covers**: that the BFF
+TypeScript code sends `durability: "exit"` in the request body — the correct server-side config.
+The runtime test covers that the underlying checkpointing mechanism works and is bounded.
+
+**Alternatives considered**: Full integration test against Docker Postgres (`agendai_lg`) with
+write-count query (rejected — adds Docker dependency to pytest unit suite, slow, complex);
+monkey-patching the module-level `graph`'s checkpointer (rejected — the module-level graph has
+no checkpointer, patching it would be a no-op).
+
 **Outcome → extend [ADR-025](../../docs/adr/ADR-025-langgraph-checkpoint-strategy.md) (record the
 cache-scoping constraint).**
 

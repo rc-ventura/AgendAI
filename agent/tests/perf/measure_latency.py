@@ -161,9 +161,13 @@ async def run_graph_direct(scenario: str, run_index: int) -> RunResult:
         t_llm1_start: float | None = None
         final_state = None
 
+        # After B7/B8 refactor, the LLM subgraph is "text_agent" or "audio_agent"
+        # (create_agent compiled subgraph). Its updates contain the messages list.
+        _LLM_NODES = {"text_agent", "audio_agent"}
+
         async for event in g.astream(input_state, config, stream_mode="updates"):
             node_name = next(iter(event))
-            if node_name == "chat_with_llm":
+            if node_name in _LLM_NODES:
                 if t_llm1_start is None:
                     t_llm1_start = time.perf_counter()
                 node_output = event[node_name]
@@ -195,14 +199,82 @@ async def run_graph_direct(scenario: str, run_index: int) -> RunResult:
 # Main: run N times, compute P50/P99, print summary
 # ---------------------------------------------------------------------------
 
-async def run_benchmark(scenario: str, runs: int, mode: str = "graph_direct") -> None:
+async def run_server(scenario: str, run_index: int) -> RunResult:
+    """
+    Call the running LangGraph Server via nginx (http://localhost:8080).
+    Measures end-to-end latency including nginx, LangGraph Server, Postgres checkpoint,
+    Redis SSE, and real REST API calls to the Node.js backend.
+    """
+    from langgraph_sdk import get_client
+
+    api_url = os.environ.get("LANGGRAPH_API_URL", "http://localhost:8080")
+    api_key = os.environ.get("LANGGRAPH_AUTH_TOKEN", "")
+    graph_id = "agendai_agent"
+
+    client = get_client(url=api_url, api_key=api_key)
+
+    if scenario == "text":
+        content = "Quais horários disponíveis tem na quarta-feira?"
+        input_payload = {
+            "messages": [{"role": "human", "content": content}],
+            "input_type": "text",
+        }
+    else:
+        content = "Quero cancelar meu agendamento. O ID é 42."
+        input_payload = {
+            "messages": [{"role": "human", "content": content}],
+            "input_type": "text",
+        }
+
+    result = RunResult(scenario=scenario, run_index=run_index, success=False)
+    t_start = time.perf_counter()
+
+    try:
+        thread = await client.threads.create()
+        thread_id = thread["thread_id"]
+
+        last_chunk = None
+        async for chunk in client.runs.stream(
+            thread_id=thread_id,
+            assistant_id=graph_id,
+            input=input_payload,
+            stream_mode="values",
+            config={"configurable": {}},
+        ):
+            if chunk.event == "values":
+                last_chunk = chunk.data
+
+        t_end = time.perf_counter()
+        result.timings.total = t_end - t_start
+
+        if last_chunk:
+            msgs = last_chunk.get("messages", [])
+            ai_msgs = [m for m in msgs if isinstance(m, dict) and m.get("type") == "ai"]
+            result.llm_rounds = len(ai_msgs)
+        result.success = True
+
+    except Exception as exc:
+        t_end = time.perf_counter()
+        result.timings.total = t_end - t_start
+        result.error = str(exc)
+
+    return result
+
+
+async def run_benchmark(scenario: str, runs: int, mode: str = "graph_direct", delay_s: float = 0.0) -> None:
     print(f"\n=== Latency benchmark | scenario={scenario} | runs={runs} | mode={mode} ===\n")
+    if delay_s > 0:
+        print(f"  (inter-run delay: {delay_s}s)\n")
 
     results: list[RunResult] = []
     for i in range(runs):
+        if i > 0 and delay_s > 0:
+            await asyncio.sleep(delay_s)
         print(f"  Run {i + 1}/{runs}...", end=" ", flush=True)
         if mode == "graph_direct":
             r = await run_graph_direct(scenario, i)
+        elif mode == "server":
+            r = await run_server(scenario, i)
         else:
             raise NotImplementedError(f"mode={mode} not yet implemented")
         results.append(r)
@@ -254,7 +326,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AgendAI latency measurement harness")
     parser.add_argument("--scenario", choices=["text", "voice"], default="text")
     parser.add_argument("--runs", type=int, default=5)
-    parser.add_argument("--mode", choices=["graph_direct"], default="graph_direct")
+    parser.add_argument("--mode", choices=["graph_direct", "server"], default="graph_direct")
+    parser.add_argument("--delay", type=float, default=0.0,
+                        help="Seconds between runs (use ≥4 for server mode to avoid nginx rate limit)")
     args = parser.parse_args()
 
-    asyncio.run(run_benchmark(args.scenario, args.runs, args.mode))
+    asyncio.run(run_benchmark(args.scenario, args.runs, args.mode, args.delay))

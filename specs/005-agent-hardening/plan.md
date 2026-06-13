@@ -101,6 +101,7 @@ unjustified violations. See table at the end.
 | **B7** | US3 · P4 guardrails: built-in `PIIMiddleware` + spike custom-vs-NeMo for injection/off-scope (per ADR-026) | middleware / new nodes | ADR-026, ADR-029, lesson |
 | **B8** | US4 · P6 context manager (`SummarizationMiddleware`) | `context_manager.py` / middleware | ADR-026, ADR-030 |
 | **B9** | US5 · P5 structured logs + correlation id | API middleware + agent `structlog` | ADR-031 |
+| **B10** | QA post-review fixes: audio state clear, request_id in agent logs, checkpoint runtime test | `input_detector.py`, `logging_config.py`, `test_graph.py` | — |
 
 > B0 must complete first (it makes SC-004/006/007 measurable and resolves whether the managed
 > server exposes checkpoint/cache config — which gates B3/B4). B1–B2 are the lowest-risk, highest-
@@ -179,6 +180,115 @@ docs/
 **Structure Decision**: Reuse the existing polyglot layout verbatim. No new top-level modules;
 new agent nodes live under `agent/agent/nodes/`, new API cross-cutting concerns under
 `api/src/middlewares/`, consistent with constitution I and the existing patterns.
+
+## Batch B10 — QA Post-Review Fixes
+
+These three items were identified in `specs/005-agent-hardening/reports/qa_reports_v1.0.md`
+after verifying that CRITICAL-01 and CRITICAL-02 were false positives (see research.md R4–R6).
+
+| Item | QA Finding | Effort |
+|------|------------|--------|
+| B10-A | MEDIUM-01 — clear `audio_data`/`audio_format` after consumption in `detect_input_type` | XS |
+| B10-B | HIGH-01 — add `request_id` to agent stdout logs via `ContextVar` | S |
+| B10-C | HIGH-02 — runtime checkpoint write validation with `CountingCheckpointer` | S |
+
+### B10-A — MEDIUM-01: Clear transient audio state
+
+**Root cause**: `detect_input_type` converts `audio_data` bytes → `HumanMessage(input_audio)`
+but returns the bytes field untouched. They remain in every downstream checkpoint write, bloating
+`agendai_lg`. Constitution VII: *"Transient data MUST NOT be persisted in graph state beyond the
+node that consumes them."*
+
+**Fix** (`agent/agent/nodes/input_detector.py`):
+```python
+return {
+    "input_type": "audio",
+    "messages": [msg],
+    "audio_data": None,   # clear immediately after conversion
+    "audio_format": None,
+}
+```
+
+**Test**: `detect_input_type(state_with_audio_data)["audio_data"] is None`.
+
+---
+
+### B10-B — HIGH-01: request_id in agent structured logs
+
+**Root cause**: `_JsonFormatter` has no per-request context. Agent log lines (guardrail blocks,
+circuit breaker events) cannot be correlated to a specific patient trace when reading
+`docker compose logs langgraph-server`.
+
+**Fix**: Python `contextvars.ContextVar` pattern. The contextvar is set in `detect_input_type`
+(the first node every run) by reading `config["metadata"]["request_id"]` — the value the BFF
+already injects into LangGraph run metadata. Subsequent logging in any node in the same execution
+reads it from the contextvar.
+
+```python
+# logging_config.py — additions
+from contextvars import ContextVar
+_request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
+def set_request_id(value: str) -> None:
+    _request_id_var.set(value)
+
+# _JsonFormatter.format — add field
+"request_id": _request_id_var.get(),
+```
+
+```python
+# input_detector.py — add config parameter
+from langchain_core.runnables import RunnableConfig
+from agent.logging_config import set_request_id
+
+def detect_input_type(state: AgendAIState, config: RunnableConfig | None = None) -> dict:
+    if config:
+        set_request_id((config.get("metadata") or {}).get("request_id", "-"))
+    ...
+```
+
+**Why `detect_input_type`**: it is the first node (directly after `START`) in both the text and
+audio paths. LangGraph injects `config` into any node function that declares it as a parameter.
+Setting the contextvar here means all subsequent logger calls in the run see the correct id.
+
+**Test**: `set_request_id("req-abc")` → call a logger → parse JSON output → assert
+`request_id == "req-abc"`. Verify default `"-"` when unset.
+
+---
+
+### B10-C — HIGH-02: Runtime checkpoint write count validation
+
+**Root cause**: `test_bff_route_handler_sets_durability_exit` verifies that the word `durability`
+appears in the BFF TypeScript source — a static guard. It does not prove that checkpointing is
+actually active and bounded during a real graph run.
+
+**Constraint**: `durability="exit"` is a per-run server-side parameter sent by the BFF. It cannot
+be replicated in a pure unit test (no managed LangGraph Server). The unit test therefore verifies
+the weaker — but still meaningful — claim: *checkpointing is active and writes are bounded*.
+
+**Test helper** (`agent/tests/test_graph.py`):
+```python
+from langgraph.checkpoint.memory import MemorySaver
+
+class CountingCheckpointer(MemorySaver):
+    def __init__(self):
+        super().__init__()
+        self.put_count = 0
+    def put(self, *args, **kwargs):
+        self.put_count += 1
+        return super().put(*args, **kwargs)
+    async def aput(self, *args, **kwargs):
+        self.put_count += 1
+        return await super().aput(*args, **kwargs)
+```
+
+**Test**: compile `builder` (not the module-level `graph`) with `CountingCheckpointer`, invoke a
+mocked text run, assert `1 ≤ put_count ≤ N_NODES` (where `N_NODES = 4` for the text path:
+`detect_input_type` → `text_agent` → `process_text_results` → END).
+
+This proves: (a) the checkpointer is called (recovery is possible), (b) writes are bounded
+per-run (not exponentially growing). The BFF static test covers the `durability="exit"` path.
+
+---
 
 ## Complexity Tracking
 

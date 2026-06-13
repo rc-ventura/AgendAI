@@ -1,3 +1,4 @@
+import logging
 import pytest
 import json
 import httpx
@@ -35,6 +36,72 @@ def test_detect_input_type_audio():
     state = make_state(audio_data=b"fake_audio")
     result = detect_input_type(state)
     assert result["input_type"] == "audio"
+
+
+# ── B10-A: audio_data clear (T052) ───────────────────────────────────────────
+
+def test_detect_input_type_audio_clears_transient_fields():
+    """B10-A (MEDIUM-01 QA fix): detect_input_type must explicitly return audio_data=None
+    and audio_format=None so LangGraph merges them into state and clears the bytes from
+    all subsequent checkpoints (Constitution VII: transient data must not persist)."""
+    state = make_state(audio_data=b"fake_audio", audio_format="wav")
+    result = detect_input_type(state)
+    assert "audio_data" in result and result["audio_data"] is None, (
+        "audio_data must be explicitly returned as None to overwrite the bytes in state"
+    )
+    assert "audio_format" in result and result["audio_format"] is None, (
+        "audio_format must be explicitly returned as None to overwrite the format in state"
+    )
+
+
+# ── B10-B: request_id in agent logs (T053) ───────────────────────────────────
+
+def test_logger_includes_request_id_after_set():
+    """B10-B (HIGH-01 QA fix): after set_request_id(), JSON log lines must include request_id
+    (observability contract item 4 in contracts/observability.md)."""
+    import json
+    import io
+    from agent.logging_config import set_request_id, _JsonFormatter
+
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(_JsonFormatter())
+    log = logging.getLogger("test_req_id_set")
+    log.handlers = [handler]
+    log.setLevel(logging.INFO)
+    log.propagate = False
+
+    set_request_id("req-abc-123")
+    log.info("test event")
+    set_request_id("-")  # reset so other tests see the default
+
+    data = json.loads(stream.getvalue().strip())
+    assert data.get("request_id") == "req-abc-123", (
+        f"Expected request_id='req-abc-123', got {data.get('request_id')!r}"
+    )
+
+
+def test_logger_request_id_defaults_to_dash():
+    """B10-B (HIGH-01 QA fix): request_id defaults to '-' when set_request_id is not called
+    (observability contract item 5 in contracts/observability.md)."""
+    import json
+    import io
+    from agent.logging_config import set_request_id, _JsonFormatter
+
+    set_request_id("-")  # ensure clean state from any prior test
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(_JsonFormatter())
+    log = logging.getLogger("test_req_id_default")
+    log.handlers = [handler]
+    log.setLevel(logging.INFO)
+    log.propagate = False
+
+    log.info("default test")
+    data = json.loads(stream.getvalue().strip())
+    assert data.get("request_id") == "-", (
+        f"Expected request_id='-' as default, got {data.get('request_id')!r}"
+    )
 
 
 # ── tools ─────────────────────────────────────────────────────────────────────

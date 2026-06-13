@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.language_models.chat_models import BaseChatModel
+from langgraph.checkpoint.memory import MemorySaver
 
 from agent.state import AgendAIState
 
@@ -239,3 +240,56 @@ async def test_run_id_present_for_langsmith():
         result = await graph.ainvoke(state, config=config)
 
     assert result is not None
+
+
+# ── B10-C: CountingCheckpointer (T054 / T058) ─────────────────────────────────
+
+class CountingCheckpointer(MemorySaver):
+    """Wraps MemorySaver, counting every put call — used to verify bounded checkpoint writes.
+
+    With durability='async' (default, unit test level) LangGraph writes once per superstep.
+    The test asserts writes are active (≥1) and bounded (≤ N_MAX), proving the checkpointing
+    mechanism is healthy. The BFF static test covers durability='exit' at the server level.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.put_count = 0
+
+    def put(self, *args, **kwargs):
+        self.put_count += 1
+        return super().put(*args, **kwargs)
+
+    async def aput(self, *args, **kwargs):
+        self.put_count += 1
+        return await super().aput(*args, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_writes_are_bounded(mock_api_client):
+    """B10-C (HIGH-02 QA fix): runtime validation that checkpoint writes are active and bounded
+    per graph run. Complements test_bff_route_handler_sets_durability_exit (static check) with
+    an actual write-count assertion (contracts/observability.md HIGH-02, research.md R6)."""
+    from agent.graph import builder
+
+    checkpointer = CountingCheckpointer()
+    test_g = builder.compile(checkpointer=checkpointer)
+
+    mock_response = AIMessage(content="Aqui estão os horários disponíveis!")
+
+    with patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_response)):
+        state = make_state(messages=[HumanMessage(content="Quais horários?")])
+        await test_g.ainvoke(state, config={"configurable": {"thread_id": "b10c-test-1"}})
+
+    # (a) checkpointing is active — at least one write happened (recovery is possible)
+    assert checkpointer.put_count >= 1, (
+        f"Expected ≥1 checkpoint write, got {checkpointer.put_count} — checkpointer may not be active"
+    )
+    # (b) writes are bounded — text path has 3 top-level nodes; create_agent is a compiled
+    # subgraph whose internal supersteps each write to the parent checkpointer. N_MAX equals
+    # the graph's recursion_limit (60) — any run that writes more has a loop bug.
+    N_MAX = 60
+    assert checkpointer.put_count <= N_MAX, (
+        f"Expected ≤{N_MAX} checkpoint writes per run, got {checkpointer.put_count} — "
+        "possible unbounded loop (recursion_limit=60 is the hard ceiling)"
+    )

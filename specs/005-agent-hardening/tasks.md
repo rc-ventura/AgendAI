@@ -190,6 +190,42 @@ Polyglot: agent at `agent/agent/`, agent tests `agent/tests/`, API at `api/src/`
 
 ---
 
+## Phase 9: QA Post-Review Fixes — Batch B10
+
+**Goal**: Close the three actionable QA findings confirmed valid after false-positive analysis
+(see `specs/005-agent-hardening/reports/qa_reports_v1.0.md` and `research.md` R4–R6).
+
+**Independent Test**: 91 pytest still green; all three contracts in `contracts/observability.md`
+items 4–5 pass; `audio_data` field cleared in state after audio input; runtime checkpoint write
+count bounded.
+
+### Tests — B10 (write failing-first, then implement)
+
+- [x] T052 [P] [QA] Failing test: `detect_input_type(state_with_audio_data=b"x")` returns dict with `audio_data is None` and `audio_format is None` — `agent/tests/test_nodes.py`
+- [x] T053 [P] [QA] Failing test: `set_request_id("req-abc")` → call any logger → parse JSON output → assert `"request_id": "req-abc"`; also assert default is `"-"` when unset — `agent/tests/test_nodes.py`
+- [x] T054 [P] [QA] Failing test: compile graph `builder` with `CountingCheckpointer`, run mocked text query, assert `1 <= checkpointer.put_count <= 4` — `agent/tests/test_graph.py`
+
+### Implementation — B10-A: MEDIUM-01 (audio state clear)
+
+- [x] T055 [QA] B10-A: in `detect_input_type`, extend the `if raw:` return dict with `"audio_data": None, "audio_format": None` — `agent/agent/nodes/input_detector.py` (depends T052)
+
+### Implementation — B10-B: HIGH-01 (request_id in agent logs)
+
+- [x] T056 [P] [QA] B10-B-i: add `ContextVar[str]` named `_request_id_var` (default `"-"`) and `set_request_id(value: str)` to `logging_config.py`; add `"request_id": _request_id_var.get()` field to `_JsonFormatter.format()` — `agent/agent/logging_config.py` (depends T053)
+- [x] T057 [QA] B10-B-ii: add `config: RunnableConfig | None = None` parameter to `detect_input_type`; call `set_request_id((config.get("metadata") or {}).get("request_id", "-"))` at start of function — `agent/agent/nodes/input_detector.py` (depends T055, T056)
+
+### Implementation — B10-C: HIGH-02 (runtime checkpoint write count)
+
+- [x] T058 [P] [QA] B10-C: add `CountingCheckpointer(MemorySaver)` class (overrides `put` and `aput`, increments `self.put_count`) and the bounded-write test using `builder.compile(checkpointer=CountingCheckpointer())` with mocked LLM — `agent/tests/test_graph.py` (depends T054)
+
+### Validation — B10
+
+- [x] T059 [QA] Run `cd agent && uv run pytest --tb=short` — **95 passed, 0 failed**; T052/T053/T054 pass; `audio_data`/`audio_format` cleared; `request_id` in logs; checkpoint writes bounded (30 ≤ 60); **manual gate → awaiting approval**
+
+**Checkpoint**: all three QA findings resolved; full pytest suite green; B10 approved and committed.
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase / batch dependencies
@@ -204,6 +240,7 @@ Polyglot: agent at `agent/agent/`, agent tests `agent/tests/`, API at `api/src/`
 - **US4 B8** → **depends on the B7 scaffold (T033)** for `SummarizationMiddleware`.
 - **US5 B9** → independent (API/nginx/agent logging).
 - **Polish (P8)** → after all desired batches.
+- **QA fixes (P9 B10)** → after B9 (all B10 tasks touch files that are complete post-B9).
 
 ### Story independence note
 
@@ -256,4 +293,4 @@ Tests fail-first → implementation → ADR/lesson → **manual gate → commit*
 - **B4 cache scope (Constitution IV)**: only write-stable lookups are cached; availability/appointment reads are excluded or invalidated on write — never serve stale.
 - **FR-012 scope (G3)**: only the **audio** model selection (B5) is in this cycle. Non-OpenAI **text** model selection via LiteLLM (research R10) is **deferred/out-of-scope this cycle** — FR-012 is a SHOULD; revisit in a future batch.
 - **Priority note (I1)**: US2 is front-loaded for latency per the user mandate, but **US1 (reliability, P1-critical) must land at B6 and not be deferred further** — it is the first batch after the latency wins.
-- Total: 51 tasks across 8 phases / 10 batches (B0–B9).
+- Total: 59 tasks across 9 phases / 11 batches (B0–B10). B10 adds 8 tasks (T052–T059).

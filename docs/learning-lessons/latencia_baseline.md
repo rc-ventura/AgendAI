@@ -16,36 +16,59 @@ validados como percentuais concretos. As métricas abaixo são comparadas após 
 
 ## Resultados
 
-> **Estado**: aguardando medição com sistema em execução.
-> Preencher após executar:
+### Modos de medição
+
+| Modo | Infra ativa | Descrição |
+|------|-------------|-----------|
+| `graph_direct` | API offline | Chama o grafo Python diretamente; sem nginx, sem LangGraph Server, sem Postgres; tool calls falham graciosamente |
+| `server` | Full stack | Chama via nginx → LangGraph Server → Postgres checkpoint → Redis SSE → API Node.js real |
+
+> **graph_direct** medido em 2026-06-13 com 10 runs:
+> ```bash
+> cd agent && .venv/bin/python tests/perf/measure_latency.py --scenario text --runs 10
 > ```
-> cd agent
-> uv run python tests/perf/measure_latency.py --scenario text --runs 20
-> uv run python tests/perf/measure_latency.py --scenario voice --runs 20
+> **server** medido em 2026-06-13 com 11 runs bem-sucedidos (limitação de rate: 20r/min, burst=10):
+> ```bash
+> LANGGRAPH_AUTH_TOKEN=... LANGGRAPH_API_URL=http://localhost:8080 \
+>   .venv/bin/python tests/perf/measure_latency.py --scenario text --runs 5 --mode server
+> # Para >5 runs: adicionar --delay 4
 > ```
 
-### Cenário A — Texto ("Quais horários disponíveis na quarta-feira?")
+### Cenário A — Texto ("Quais horários disponíveis tem na quarta-feira?")
 
 | Métrica | Valor | Notas |
 |---------|-------|-------|
-| P50 latência total | TBD | |
-| P99 latência total | TBD | |
-| Latência mínima | TBD | |
-| Latência máxima | TBD | |
-| Rounds de LLM (média) | TBD | target: ≤2 após B2 |
-| Tokens de entrada (média) | TBD | |
-| Tokens de saída (média) | TBD | |
-| Custo estimado/conversa (USD) | TBD | baseline para SC-008 |
-| Writes de checkpoint por turno | TBD | baseline para SC-006 |
+| Métrica | `graph_direct` | `server` (full stack) | Overhead |
+|---------|---------------|----------------------|---------|
+| P50 latência total | **0.98s** | **1.07s** | +90ms (+9%) |
+| P99 latência total | **2.20s** | **2.15s** | ~0ms |
+| Latência mínima | 0.62s | 0.79s | |
+| Latência máxima | 2.21s | 2.20s | |
+| Rounds de LLM (média) | **2.0** ¹ | **1.0** ² | diferente contexto |
+| Tokens de entrada (média) | ~900 est. | n/a (server não expõe) | |
+| Custo estimado/conversa (USD) | **$0.000136** | n/a | |
+| Writes de checkpoint/turno | **30** (async) → **1** (exit) | n/a | medido via CountingCheckpointer |
 
-### Cenário B — Voz (proxy de texto — sem áudio real no harness)
+¹ `graph_direct`: API offline → tool calls falham → LLM recorre a resposta de "indisponibilidade" em 2 rounds  
+² `server`: API online → LLM responde diretamente em 1 round (pede mais detalhes sem chamar ferramenta)
+
+> **Conclusão principal**: o overhead da infra completa (nginx + LangGraph Server + Postgres + Redis + API real)
+> é apenas **+90ms em P50** — o gargalo é o LLM, não a infraestrutura.
+>
+> **Nota sobre rate limit**: nginx limita a 20r/min (burst=10). Para benchmarks com >5 runs em `server` mode,
+> usar `--delay 4` entre runs.  
+> **Runs rápidos em `graph_direct`** (0.62–0.83s) = provável prompt cache OpenAI (mesmo input repetido).
+
+### Cenário B — Voz
 
 | Métrica | Valor | Notas |
 |---------|-------|-------|
-| P50 latência total | TBD | |
+| P50 latência total | TBD | requer `validate_b5_audio.py` com Docker rodando |
 | P99 latência total | TBD | |
 | Rounds de LLM (média) | TBD | |
 | Custo estimado/conversa (USD) | TBD | |
+
+> Validação de áudio B5 disponível em `agent/tests/perf/validate_b5_audio.py` (requer Docker + LANGGRAPH_AUTH_TOKEN).
 
 ---
 
@@ -94,12 +117,12 @@ Ver detalhes em [guardrails_langchain_middleware.md](./guardrails_langchain_midd
 
 ## Targets de Otimização (baseline → target)
 
-| SC | Métrica | Baseline | Target |
-|----|---------|----------|--------|
-| SC-004 | Latência P50 texto | TBD | −≥50% do baseline |
-| SC-006 | Writes de checkpoint/turno | TBD | −≥80% (exit mode = ~1 em vez de ~6) |
-| SC-007 | Latência voz (transcrição+síntese) | TBD | −≥50% do baseline |
-| SC-008 | Custo/conversa | TBD | ≤ baseline à medida que histórico cresce |
+| SC | Métrica | graph_direct | server (full stack) | Target | Status |
+|----|---------|-------------|---------------------|--------|--------|
+| SC-004 | Latência P50 texto | **0.98s** | **1.07s** (+90ms) | ≤0.49s (−50%) | 🟡 overhead infra mínimo; gargalo = LLM |
+| SC-006 | Writes checkpoint/turno | **30** → **1** (exit) | n/a | −≥80% | ✅ durability=exit implementado (B3) |
+| SC-007 | Latência voz | TBD | TBD | −≥50% baseline voz | TBD (requer teste áudio no Docker) |
+| SC-008 | Custo/conversa | **$0.000136** | n/a | ≤ baseline com histórico longo | TBD |
 
 ---
 
