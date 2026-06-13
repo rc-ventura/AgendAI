@@ -122,6 +122,46 @@ trivialmente em nós futuros dedicados a dados estáticos (lista de médicos, co
 
 ---
 
+## `build_cache()` do agente: cliente lazy e falha de conexão NÃO tratada em runtime
+
+`agent/agent/cache.py` (`build_cache()`) é chamado no import de `agent/agent/graph.py`
+(`graph = builder.compile(cache=build_cache())`). Três fatos importantes descobertos:
+
+1. **`redis.asyncio.from_url()` é lazy.** Cria o objeto cliente **sem abrir conexão** — conexão
+   só acontece na primeira operação. Logo, uma `REDIS_URI` com host/porta errados **não falha no
+   import/startup**; o erro só apareceria na primeira operação de cache durante um run do grafo.
+
+2. **O `except Exception: return None` em `agent/agent/cache.py` cobre apenas erros de
+   build-time** — pacote `redis` ausente, URI sintaticamente malformada. Ele **não** cobre falha
+   de conexão em runtime (host inalcançável), porque essa falha não ocorre dentro de `build_cache()`.
+
+3. **O efeito de uma falha de cache em runtime NÃO foi verificado.** Depende de como o
+   `RedisCache`/executor Pregel do `langgraph 1.2.0` trata erro de cache: o padrão cache-aside
+   maduro é best-effort (cache miss em erro), mas isso **não foi confirmado** contra os internos do
+   langgraph (DeepWiki não cobre libs de terceiros; não há execução de teste disponível).
+
+### Decisão (B10/observabilidade): logging, não health-check
+
+Adicionado apenas logging em `build_cache()` para tornar visível qual caminho foi tomado, sem
+mudar comportamento (espelha o fallback gracioso do lado da API descrito acima):
+
+```python
+# agent/agent/cache.py
+logger.info("cache=disabled reason=no_redis_uri")     # REDIS_URI ausente
+logger.info("cache=redis prefix=langgraph:cache:")     # cache construído
+logger.warning("cache=disabled reason=build_failed", exc_info=True)  # erro de build
+```
+
+### Upgrade path (se runtime virar problema)
+
+Se monitoramento mostrar que falha de conexão Redis em runtime derruba runs, adicionar um
+health-check `await client.ping()` no startup e cair para `None` (sem cache). Isso torna o
+comportamento de runtime irrelevante por construção — URI errada vira "sem cache" no boot, igual
+ao caso `no_redis_uri`. Custo: um `ping` async no startup (cuidado: `build_cache()` roda em
+contexto síncrono no import de `agent/agent/graph.py`).
+
+---
+
 ## Relação com ADR-025 e próximos passos
 
 - **ADR-025 B4** — documenta a decisão e a implementação

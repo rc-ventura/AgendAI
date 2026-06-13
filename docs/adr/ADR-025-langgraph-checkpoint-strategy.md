@@ -306,7 +306,20 @@ batch. Futura adição de nó dedicado (buscar_medicos, dados estáticos) pode u
 - `redis-cli KEYS "agendai:cache:*"` → `agendai:cache:horarios` após primeira request ✅
 - `delByPrefix` via SCAN confirmado: prefixo `horarios:` e `horarios` removidos ✅
 - 41 Jest + 66 pytest verdes ✅
-- `_build_cache()` retorna `None` sem `REDIS_URI` (graceful) ✅
+- `build_cache()` retorna `None` sem `REDIS_URI` (graceful) ✅
+
+### Limitação conhecida — falha de conexão Redis em runtime
+
+`build_cache()` em `agent/agent/cache.py` cria o cliente com `redis.asyncio.from_url()`, que é
+**lazy** — não abre conexão no startup. Portanto uma `REDIS_URI` com host/porta errados **não
+falha no boot**; o erro só apareceria na primeira operação de cache durante um run. O
+`except Exception: return None` (`agent/agent/cache.py`) cobre apenas erros de build-time
+(pacote `redis` ausente, URI malformada), **não** falha de conexão em runtime. O efeito de uma
+falha de cache em runtime depende de como o `RedisCache`/Pregel do langgraph 1.2.0 trata o erro —
+**não verificado** (best-effort por convenção, mas não confirmado). Aplicado apenas logging de
+observabilidade neste batch; o upgrade path (health-check `await client.ping()` no startup) está
+documentado em
+[learning-lessons/redis_cache_api_migration.md](../learning-lessons/redis_cache_api_migration.md).
 
 ---
 
