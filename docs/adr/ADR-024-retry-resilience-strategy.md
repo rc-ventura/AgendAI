@@ -287,6 +287,46 @@ A implementação atual cobre apenas **hard failures** (1 de 5 categorias). O mo
 adiciona estados DEGRADED e HALF-OPEN, health score com decay, e detecção de falhas semânticas.
 Ver `docs/learning-lessons/circuit_breaker_custom_vs_libs.md` para upgrade path detalhado.
 
+### CircuitBreaker é singleton de processo — implicações de escala
+
+`llm_breaker` e `api_breaker` em `agent/agent/resilience.py:69-70` são instâncias **a nível de
+módulo**, criadas uma vez no import. O estado (`_fails`, `_opened_at` em
+`agent/agent/resilience.py:33-34`) vive **na memória de um único processo Python**. Todos os runs
+do grafo nesse processo compartilham o mesmo breaker.
+
+**Por que isso é o comportamento CORRETO hoje:** se a OpenAI está fora, está fora para todos. O
+breaker existe justamente para detectar uma falha de infraestrutura global e parar de martelar o
+serviço caído — compartilhar o estado entre requests é a *feature* (visibilidade cross-request),
+não um defeito. Quando o circuito abre (`agent/agent/resilience.py:61-62`), todos os pacientes
+recebem `PT_BR_UNAVAILABLE` por 30s; é o fail-fast global desejado.
+
+**Deploy atual = réplica única.** O serviço `langgraph-server` em `docker-compose.yml` é definido
+uma vez, sem `deploy.replicas` nem `--scale` — há **1 processo** do agente. Logo existe **1**
+`llm_breaker`, de fato global. Não há dívida técnica a corrigir neste estágio (clínica única,
+baixa concorrência).
+
+**Onde a escala quebra a premissa — duas dimensões distintas:**
+
+| Dimensão | O que acontece | Quando vira problema | Mitigação |
+|---|---|---|---|
+| **N réplicas** (escala horizontal) | Cada processo tem seu próprio breaker em memória → N×3 falhas antes de todos abrirem; uma réplica não avisa as outras. O "fail-fast global" deixa de ser global. | Render/orquestrador rodando >1 instância do `langgraph-server` | Mover o estado do breaker (`_fails`, `_opened_at`) para o **Redis** já presente no stack (`docker-compose.yml`, `REDIS_URI`) — breaker compartilhado entre processos |
+| **Multi-tenant** (Spec 006+) | Um único breaker global: o tenant A que dispara o circuito derruba o tenant B (blast radius grande demais) | Quando houver `tenant_id`/`user_id` autenticado (Spec 006) | Breaker chaveado por tenant — `dict[str, CircuitBreaker]` por `tenant_id`, em vez de singleton |
+
+**Distinção importante:** as duas mitigações são ortogonais e independentes:
+- *Redis-backed* resolve a fragmentação entre **processos** (escala horizontal), mantendo o breaker
+  global por tenant.
+- *Por-tenant* resolve o blast radius entre **clientes** (multi-tenancy), e pode coexistir com o
+  estado em memória (1 réplica) ou em Redis (N réplicas).
+
+Para uma falha de infraestrutura genuinamente global (OpenAI inteira fora, rate limit da conta), o
+singleton de processo continua correto em qualquer escala — o por-tenant só importa quando o limite
+de falha é por fatia de tráfego (ex.: rate limit por cliente).
+
+**Nota sobre `close()` e thread-safety:** `CircuitBreaker.close()` (`agent/agent/resilience.py:36-39`)
+existe para isolamento entre testes e **não é thread-safe**. Aceitável: testes rodam serialmente e a
+produção usa asyncio single-threaded. Um breaker Redis-backed (acima) precisaria de operações
+atômicas (ex.: `INCR`) para o incremento de falhas sob concorrência real.
+
 ---
 
 ## Notas de Implementação — API-side (2026-06-11)
