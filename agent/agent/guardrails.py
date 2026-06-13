@@ -65,7 +65,7 @@ _INJECTION = re.compile(
     r'|act\s+as\s+(a\s+|an\s+)?(different\s+|new\s+)?(ai|assistant|bot|model|character|human)\b'
     r'|pretend\s+(you\s+are|to\s+be)\s+'
     r'|\bjailbreak\b'
-    r'|\bDAN\b'
+    r'|\bDAN\s+mode\b'
     r'|do\s+anything\s+now'
     r'|<\s*(system|SYS)\s*>'
     r'|\[\[.{0,200}?\]\]'

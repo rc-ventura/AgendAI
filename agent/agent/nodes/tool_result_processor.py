@@ -85,6 +85,11 @@ def process_tool_results(state: AgendAIState) -> dict:
     if tool_name is None:
         return {}
 
+    # Idempotency: a tool_call_id that already triggered an email must never
+    # trigger another one — even if this node runs again on a later turn.
+    if tool_call_id in (state.get("processed_tool_ids") or []):
+        return {}
+
     tool_msg = _get_tool_message(state, tool_call_id)
     if tool_msg is None:
         return {}
@@ -97,4 +102,8 @@ def process_tool_results(state: AgendAIState) -> dict:
     payment_data = _parse_json(payment_msg) if payment_msg else None
 
     payload = _build_email_payload(tool_name, tool_data, payment_data)
-    return {"email_pending": True, "email_payload": payload}
+    return {
+        "email_pending": True,
+        "email_payload": payload,
+        "processed_tool_ids": [tool_call_id],
+    }

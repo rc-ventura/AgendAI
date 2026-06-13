@@ -23,7 +23,7 @@ async function withDbRetry(fn) {
     factor: 2,
     onFailedAttempt: (err) => {
       if (!isTransient(err)) {
-        throw new AbortError(err.message);
+        throw new AbortError(err);
       }
     },
   });

@@ -1,4 +1,5 @@
-from typing import Literal
+import operator
+from typing import Annotated, Literal
 from langgraph.graph import MessagesState
 
 
@@ -11,3 +12,6 @@ class AgendAIState(MessagesState):
     email_payload: dict | None
     final_response: str | bytes | None
     context_summary: str | None  # (ADR-030): last summarization text (observability/debug)
+    # Idempotency guard: tool_call_ids that already triggered an email, so a
+    # later turn with no tool calls cannot re-detect an old booking and resend.
+    processed_tool_ids: Annotated[list[str], operator.add]
