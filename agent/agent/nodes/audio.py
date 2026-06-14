@@ -3,9 +3,44 @@
 Keeps the audio-blob handling out of graph.py, which stays focused on wiring
 the StateGraph and the graph-level node functions.
 """
+import struct
+
 from langchain_core.messages import HumanMessage
 
 from agent.state import AgendAIState
+
+# gpt-audio outputs raw PCM16 at these specs when stream=True.
+# mp3/opus/flac are only available with stream=False, which LangChain does not use.
+_WAV_SAMPLE_RATE = 24000
+_WAV_CHANNELS = 1
+_WAV_SAMPLE_WIDTH = 2  # 16-bit = 2 bytes per sample
+
+
+def pcm16_to_wav(pcm_bytes: bytes) -> bytes:
+    """Wrap raw PCM16 bytes in a RIFF/WAV container.
+
+    The WAV format is a thin header around raw PCM data. The header tells the
+    player how to interpret the bytes: sample rate (24 kHz), channels (mono),
+    and bit depth (16-bit). Without it, browsers cannot play the audio.
+
+    RIFF layout:
+        "RIFF" + file_size (4B LE) + "WAVE"
+        "fmt " + chunk_size=16 (4B) + PCM=1 (2B) + channels (2B)
+                + sample_rate (4B) + byte_rate (4B) + block_align (2B) + bits (2B)
+        "data" + data_size (4B) + <raw PCM bytes>
+    """
+    data_size = len(pcm_bytes)
+    byte_rate = _WAV_SAMPLE_RATE * _WAV_CHANNELS * _WAV_SAMPLE_WIDTH
+    block_align = _WAV_CHANNELS * _WAV_SAMPLE_WIDTH
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF", 36 + data_size, b"WAVE",
+        b"fmt ", 16, 1,  # chunk_size=16, PCM=1
+        _WAV_CHANNELS, _WAV_SAMPLE_RATE, byte_rate, block_align,
+        _WAV_SAMPLE_WIDTH * 8,
+        b"data", data_size,
+    )
+    return header + pcm_bytes
 
 
 def is_input_audio_message(msg) -> bool:

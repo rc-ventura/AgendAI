@@ -15,7 +15,7 @@ from agent.nodes.llm_core import base_llm, audio_llm, SYSTEM_PROMPT
 from agent.nodes.tools import ALL_TOOLS
 from agent.nodes.email_sender import send_email
 from agent.nodes.tool_result_processor import process_tool_results
-from agent.nodes.audio import strip_consumed_audio
+from agent.nodes.audio import strip_consumed_audio, pcm16_to_wav
 
 
 def route_by_input_type(state: AgendAIState) -> Literal["text_agent", "audio_agent"]:
@@ -28,35 +28,9 @@ def route_after_agent(state: AgendAIState) -> Literal["send_email", "__end__"]:
     return END
 
 
-_WAV_SAMPLE_RATE = 24000  # gpt-4o-audio-preview output sample rate
-_WAV_CHANNELS = 1
-_WAV_SAMPLE_WIDTH = 2  # 16-bit = 2 bytes
-
-
-def _pcm16_to_wav(pcm_bytes: bytes) -> bytes:
-    """Wrap raw PCM16 bytes in a RIFF/WAV container so browsers can play it."""
-    import struct
-    data_size = len(pcm_bytes)
-    byte_rate = _WAV_SAMPLE_RATE * _WAV_CHANNELS * _WAV_SAMPLE_WIDTH
-    block_align = _WAV_CHANNELS * _WAV_SAMPLE_WIDTH
-    header = struct.pack(
-        "<4sI4s4sIHHIIHH4sI",
-        b"RIFF", 36 + data_size, b"WAVE",
-        b"fmt ", 16, 1,  # PCM
-        _WAV_CHANNELS, _WAV_SAMPLE_RATE, byte_rate, block_align,
-        _WAV_SAMPLE_WIDTH * 8,
-        b"data", data_size,
-    )
-    return header + pcm_bytes
-
-
 def extract_audio_response(state: AgendAIState) -> dict:
     """Extracts audio bytes from the final AIMessage after the audio_agent loop exits,
-    then strips the consumed input_audio blob from message history.
-
-    OpenAI only supports pcm16 when stream=True (LangChain always streams).
-    We wrap the raw PCM16 bytes in a WAV container so the browser can play them.
-    """
+    then strips the consumed input_audio blob from message history."""
     stripped = strip_consumed_audio(state)
     update: dict = {}
     if stripped:
@@ -66,7 +40,7 @@ def extract_audio_response(state: AgendAIState) -> dict:
         audio_info = getattr(msg, "additional_kwargs", {}).get("audio", {})
         if audio_info and "data" in audio_info:
             raw = base64.b64decode(audio_info["data"])
-            update["final_response"] = _pcm16_to_wav(raw)
+            update["final_response"] = pcm16_to_wav(raw)
             return update
 
     logger.warning(
