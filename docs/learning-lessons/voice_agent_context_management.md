@@ -204,32 +204,21 @@ turno**. Um clipe de 1.5s ≈ 64KB base64. Isso anula parcialmente o ganho do B3
 e infla custo/latência por turno — exatamente o que a Constitution VII proíbe (dado transiente não
 deve persistir além do nó que o consome).
 
-**Mitigação (implementada, não é a solução completa)**: o nó `extract_audio_response`
-(`agent/agent/graph.py`) já roda depois do `audio_agent` ter consumido o áudio. Adicionamos
-`_strip_consumed_audio` que substitui cada `HumanMessage` com `input_audio` por um placeholder de
-texto `"[mensagem de voz]"` **reusando o mesmo `id`** — o `add_messages` faz update in-place
-(confirmado: re-emitir com mesmo `id` sobrescreve, sem precisar de `RemoveMessage`). Resultado: o
-blob sai do histórico assim que cumpre sua função.
+**Mitigação atual (ADR-032)**: o pipeline gpt-audio foi revertido (2026-06-14). O `audio_data`
+nunca entra em `messages` — o nó `transcribe_audio` consome os bytes e retorna um `HumanMessage`
+com o **transcript de texto** (palavras). O blob de áudio nunca persiste em checkpoint.
 
-```python
-# agent/agent/graph.py
-def _strip_consumed_audio(state: AgendAIState) -> list:
-    replacements = []
-    for msg in state["messages"]:
-        if _is_input_audio_message(msg) and getattr(msg, "id", None):
-            replacements.append(HumanMessage(id=msg.id, content="[mensagem de voz]"))
-    return replacements
+```
+audio_data (bytes) → transcribe_audio → HumanMessage(content="quero marcar consulta") → messages
 ```
 
-**Trade-off aceito**: o **transcript real (as palavras) NÃO é preservado** — o modelo perde o
-conteúdo de turnos de voz passados. Aceitável para o fluxo atual (agendamento curto, single-turn).
-Para conversas multi-turn de voz, o contexto degrada — é exatamente o gap que o Whisper paralelo
-(L5) resolve preservando o transcript. Esta mitigação é o passo barato que **para o sangramento de
-checkpoint hoje sem reintroduzir o Whisper** (que desfaria o ganho de latência do B5/ADR-028).
+O problema de checkpoint bloat descrito acima (blob em `input_audio` persistindo em `messages`)
+não ocorre mais na implementação atual. O `_strip_consumed_audio` e `extract_audio_response`
+foram removidos junto com o gpt-audio. Ver [ADR-032](../adr/ADR-032-audio-revert-stt-tts.md).
 
-**Por que placeholder de texto e não remoção total**: remover a `HumanMessage` deixaria o turno
-sem o lado "human", confundindo a distribuição de roles e quebrando a sequência conversacional.
-O placeholder mantém a estrutura ("paciente enviou um áudio") com custo de bytes ~zero.
+**Trade-off aceito**: o transcript (texto transcrito) persiste em `messages` — é exatamente o
+que queremos para contexto multi-turn. O blob de áudio bruto não persiste — é consumido pelo STT
+e descartado (`audio_data: None` retornado por `transcribe_audio`).
 
 ---
 
@@ -237,11 +226,11 @@ O placeholder mantém a estrutura ("paciente enviou um áudio") com custo de byt
 
 | Prioridade | Ação | Trigger |
 |------------|------|---------|
-| ✅ Feito | Strip do blob de áudio em `extract_audio_response` (placeholder de texto, mesmo `id`) — para o checkpoint bloat hoje | Implementado (B10-D) |
-| Alta | Remover `SummarizationMiddleware` do stack do `audio_agent` (bug #33856) | Antes de go-live em produção |
-| Média | Implementar Whisper paralelo em `input_detector.py` salvando transcript — **preserva o conteúdo** que o strip (L6) descarta | Monitoramento mostrar conversas de áudio > 10 turnos |
-| Média | Implementar `context_trimmer` como nó do grafo seguindo padrão aiechoes (SystemMessage, threshold OR) | Junto com Whisper paralelo |
-| Baixa | Migrar resumo de `HumanMessage` → `SystemMessage` no `SummarizationMiddleware` (text-only) | Se upstream corrigir bug #33856 |
+| ✅ Feito | Blob de áudio não entra mais em `messages` — `transcribe_audio` retorna só o transcript de texto (ADR-032) | Implementado (revert B5) |
+| ✅ Feito | `SummarizationMiddleware` só está no `text_agent` — o `audio_agent` (gpt-audio) foi removido | ADR-032 |
+| Média | Implementar `context_trimmer` como nó do grafo seguindo padrão aiechoes (SystemMessage, threshold OR) | Monitoramento mostrar conversas > 20 turnos |
+| Baixa | Migrar resumo de `HumanMessage` → `SystemMessage` no `SummarizationMiddleware` (text-only) | Se upstream corrigir LangChain bug #33856 |
+| Baixa | Voice Sandwich (STT streaming → agent → TTS streaming via WebSocket) para latência < 1s | Spec 006 dedicada |
 
 **Referências desta pesquisa:**
 - [rosiefaulkner/langgraph-voice-agent](https://github.com/rosiefaulkner/langgraph-voice-agent) — padrão Whisper-first

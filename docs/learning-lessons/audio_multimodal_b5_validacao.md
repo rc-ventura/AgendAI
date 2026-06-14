@@ -289,7 +289,7 @@ real gera, e quebra.
 **Conclusão definitiva**: o `gpt-audio` não sobrevive ao streaming forçado do servidor de
 jeito nenhum dentro do loop do agente — nem áudio-out (#29776), nem texto-out com tools.
 
-**Decisão (ADR-031)**: tirar o `gpt-audio` do loop e voltar ao **STT+TTS isolado**:
+**Decisão (ADR-032)**: tirar o `gpt-audio` do loop e voltar ao **STT+TTS isolado**:
 
 ```
 detect_input_type → transcribe_audio (gpt-audio, raw SDK, sem stream/tools)
@@ -305,4 +305,4 @@ detect_input_type → transcribe_audio (gpt-audio, raw SDK, sem stream/tools)
 **Trade-off aceito**: SC-007 (≥50% redução) não é atingido por esta via — voltamos a 2–3
 chamadas. Confiabilidade > latência por ora. Agente de voz performático → **spec dedicada**.
 
-Validado ao vivo: 6/6 runs com WAV válido; 108 testes pytest verdes. Ver [ADR-031](../adr/ADR-031-audio-revert-stt-tts.md).
+Validado ao vivo: 6/6 runs com WAV válido; 108 testes pytest verdes. Ver [ADR-031](../adr/ADR-032-audio-revert-stt-tts.md).

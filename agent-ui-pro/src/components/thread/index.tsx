@@ -88,6 +88,67 @@ function ScrollToBottom(props: { className?: string }) {
   );
 }
 
+async function convertWebmBlobToWav(blob: Blob): Promise<Blob> {
+  const AudioCtx =
+    window.AudioContext ||
+    (
+      window as Window &
+        typeof globalThis & { webkitAudioContext?: typeof AudioContext }
+    ).webkitAudioContext;
+  if (!AudioCtx) {
+    throw new Error("AudioContext indisponivel para conversao de audio.");
+  }
+
+  const audioContext = new AudioCtx();
+  try {
+    const sourceBuffer = await blob.arrayBuffer();
+    const decoded = await audioContext.decodeAudioData(sourceBuffer.slice(0));
+
+    const channels = decoded.numberOfChannels;
+    const sampleRate = decoded.sampleRate;
+    const frameCount = decoded.length;
+
+    const bytesPerSample = 2;
+    const blockAlign = channels * bytesPerSample;
+    const byteRate = sampleRate * blockAlign;
+    const dataSize = frameCount * blockAlign;
+    const out = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(out);
+
+    const writeString = (offset: number, text: string) => {
+      for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
+    };
+
+    writeString(0, "RIFF");
+    view.setUint32(4, 36 + dataSize, true);
+    writeString(8, "WAVE");
+    writeString(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, channels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, byteRate, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, 16, true);
+    writeString(36, "data");
+    view.setUint32(40, dataSize, true);
+
+    const channelData = Array.from({ length: channels }, (_, i) => decoded.getChannelData(i));
+    let offset = 44;
+    for (let i = 0; i < frameCount; i++) {
+      for (let c = 0; c < channels; c++) {
+        const sample = Math.max(-1, Math.min(1, channelData[c][i] ?? 0));
+        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+        offset += 2;
+      }
+    }
+
+    return new Blob([out], { type: "audio/wav" });
+  } finally {
+    await audioContext.close();
+  }
+}
+
 export function Thread() {
   const [artifactContext, setArtifactContext] = useArtifactContext();
   const [artifactOpen, closeArtifact] = useArtifactOpen();
@@ -190,13 +251,16 @@ export function Thread() {
       content: "🎙",
     };
     try {
-      const arrayBuffer = await blob.arrayBuffer();
+      const normalizedBlob =
+        blob.type === "audio/webm" ? await convertWebmBlobToWav(blob) : blob;
+      const arrayBuffer = await normalizedBlob.arrayBuffer();
       const audioData = Array.from(new Uint8Array(arrayBuffer));
       stream.submit(
         {
           messages: [audioHumanMessage],
           input_type: "audio",
           audio_data: audioData,
+          audio_format: normalizedBlob.type || "audio/wav",
         } as any,
         {
           streamMode: ["values"],
@@ -209,7 +273,9 @@ export function Thread() {
         },
       );
     } catch {
-      toast.error("Erro ao processar áudio. Tente novamente.");
+      toast.error(
+        "Erro ao processar áudio (conversão WEBM→WAV). Tente enviar WAV/MP3.",
+      );
     }
   };
 
@@ -278,7 +344,10 @@ export function Thread() {
     const lastAiMsg = [...stream.messages].reverse().find((m) => m.type === "ai");
     if (!lastAiMsg?.id) return;
 
-    const blob = new Blob([bytes], { type: "audio/mpeg" });
+    // Re-wrap to a Uint8Array backed by ArrayBuffer (not SharedArrayBuffer),
+    // which satisfies BlobPart typing on newer TypeScript libs.
+    const blobBytes = new Uint8Array(bytes);
+    const blob = new Blob([blobBytes], { type: "audio/wav" });
     const url = URL.createObjectURL(blob);
     setTtsAudioMap((prev) => {
       const msgId = lastAiMsg.id!;

@@ -12,6 +12,7 @@ server {
     proxy_set_header          X-Request-ID $request_id;
     proxy_read_timeout        300s;
     chunked_transfer_encoding on;
+    client_max_body_size      10m;
 
     # ── Health check sem auth (usado pelo Render) ────────────────────────────
     location = /health {

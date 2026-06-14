@@ -1,4 +1,4 @@
-# ADR-031: Reverter áudio multimodal → pipeline STT+TTS isolado
+# ADR-032: Reverter áudio multimodal → pipeline STT+TTS isolado
 
 **Status**: Accepted
 **Data**: 2026-06-14
