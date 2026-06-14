@@ -305,4 +305,56 @@ detect_input_type → transcribe_audio (gpt-audio, raw SDK, sem stream/tools)
 **Trade-off aceito**: SC-007 (≥50% redução) não é atingido por esta via — voltamos a 2–3
 chamadas. Confiabilidade > latência por ora. Agente de voz performático → **spec dedicada**.
 
-Validado ao vivo: 6/6 runs com WAV válido; 108 testes pytest verdes. Ver [ADR-031](../adr/ADR-032-audio-revert-stt-tts.md).
+Validado ao vivo: 6/6 runs com WAV válido; 108 testes pytest verdes. Ver [ADR-032](../adr/ADR-032-audio-revert-stt-tts.md).
+
+---
+
+## Lição 11 — Bugs pós-revert e melhorias de curto prazo (2026-06-14)
+
+Após estabilizar o pipeline STT+TTS, três problemas adicionais foram encontrados e corrigidos:
+
+### 11a — PII email mascarava o identificador funcional do paciente
+
+`PIIMiddleware(apply_to_input=True)` redactava o email da mensagem antes do LLM ver. O modelo
+chamava `buscar_agendamentos_paciente` com `email=[REDACTED_EMAIL]` → 400 Bad Request.
+
+**Raiz**: email é PII para logs/traces, mas é o **identificador funcional** para lookup no banco.
+Mascarar o input significa o LLM nunca conhece o valor real para passar à tool call.
+
+**Fix**: `apply_to_input=False, apply_to_output=False, apply_to_tool_results=False` para `pii_email`.
+CPF continua com `apply_to_input=True` (não é chave funcional, nunca deve ser repetido).
+Proteção de email fica na camada de logs (structlog não loga body) e no LangSmith (mascaramento nativo).
+
+**Regra**: PII middleware com `apply_to_input=True` só faz sentido para dados que o LLM **não
+precisa conhecer** (passwords, tokens de auth). Identificadores funcionais devem fluir intactos.
+
+### 11b — Mensagem de áudio duplicada na thread
+
+O `stream.submit` enviava `messages: [HumanMessage("🎙")]` no input E `transcribe_audio` adicionava
+`HumanMessage(transcript)` server-side → dois balões humanos consecutivos na thread.
+
+**Fix**: remover `messages:[...]` do input do submit. `transcribe_audio` adiciona o transcript como
+única mensagem humana. O "🎙" vive apenas em `optimisticValues` (durante o loading) e é substituído
+pelo transcript real quando o estado do servidor chega.
+
+**Resultado UX**: o usuário vê "🎙" enquanto processa, depois o texto do que disse — comportamento
+idêntico a um assistente de voz (mostrar o transcript como mensagem humana).
+
+### 11c — nginx 413 por falta de client_max_body_size
+
+WAV gerado por WEBM→WAV (~1.5 MB) excedia o limite padrão do nginx (1 MB) → 413 em toda chamada
+de voz. Adicionado `client_max_body_size 10m` no bloco `server {}` do `nginx.conf.template`.
+
+### 11d — convertWebmBlobToWav no lugar errado
+
+A função de conversão DSP estava no componente `thread/index.tsx` (UI). Movida para
+`hooks/use-audio.tsx` onde pertence — o hook entrega sempre um blob WAV pronto, o componente
+não precisa saber que o browser grava em WEBM.
+
+### Melhorias documentadas para spec futura
+
+| Item | Esforço | Impacto |
+|------|---------|---------|
+| **Groq Whisper** — troca `AsyncOpenAI()` por `AsyncGroq()` em `transcriber.py`, STT 1s→0.2s | 1h + `GROQ_API_KEY` | Alto |
+| **Cap de duração no cliente** — `setTimeout(() => mediaRecorder.stop(), 15_000)` em `use-audio.tsx` | 30min | Médio |
+| **Voice Sandwich** (WebSocket + streaming STT/TTS) — ref: [langchain-ai/voice-sandwich-demo](https://github.com/langchain-ai/voice-sandwich-demo) | Spec 006 | Alto (latência percebida < 1s) |
