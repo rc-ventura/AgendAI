@@ -68,6 +68,11 @@ O stack real é `host:8080 → nginx → langgraph-server:8123`. Testes de integ
 
 ---
 
+> ⚠️ **ATUALIZAÇÃO (2026-06-14)**: A solução `pcm16` + wrapper WAV descrita na Lição 5 foi
+> **abandonada** em favor do B1 (Lição 9). O `gpt-audio` não consegue devolver áudio sob o
+> streaming forçado do servidor (LangChain #29776). A Lição 5 fica como registro de por que o
+> caminho single-call não funciona. **O código de saída atual é o nó TTS dedicado** (Lição 9).
+
 ## Lição 5 — `audio.format="mp3"` falha com streaming; a solução é `pcm16` + wrapper WAV
 
 ### O erro
@@ -156,3 +161,118 @@ processáveis incrementalmente; MP3 requer o frame completo), independente de ve
 | `agent/agent/nodes/audio.py` | adicionado `pcm16_to_wav()` |
 | `agent/agent/graph.py` | `extract_audio_response` chama `pcm16_to_wav()` |
 | `agent-ui-pro/src/hooks/use-tts-player.tsx` | `"audio/mpeg"` → `"audio/wav"` |
+
+---
+
+## Lição 6 — Erros de áudio multimodal seguem uma cadeia causal (não são aleatórios)
+
+Durante a validação de 2026-06-14, os erros apareceram em sequência:
+
+1. `Invalid value: 'webm'. Supported values are: 'wav' and 'mp3'`
+2. `unsupported_format` (mesmo com `format="wav"`)
+3. `413 Request Entity Too Large` no nginx
+
+Isso não são três bugs independentes. É a mesma cadeia:
+
+```
+MediaRecorder gera WEBM/Opus
+   ↓
+payload rotulado com format incompatível (ou rótulo != bytes reais)
+   ↓
+API recusa formato/container
+   ↓
+correção via conversão para WAV aumenta tamanho da request
+   ↓
+nginx default (~1MB) passa a barrar com 413
+```
+
+**Aprendizado**: em áudio multimodal, sempre validar em ordem:
+1) codec/container real, 2) campo `input_audio.format`, 3) limites de proxy/body size.
+
+---
+
+## Lição 7 — Payload grande após WEBM→WAV é esperado (trade-off conhecido)
+
+WAV PCM é essencialmente sem compressão, enquanto WEBM/Opus é comprimido.
+Para voz, é normal WAV ficar **várias vezes maior** que WEBM para a mesma duração.
+
+Consequências práticas:
+- Mais bytes no upload (maior latência de rede em uplink ruim)
+- Maior chance de 413 em proxies/gateways
+- Mais pressão em memória/serialização quando o payload vai em JSON/lista de bytes
+
+Isso explica o `client intended to send too large body` com ~1.1 MB no `/runs/stream`.
+
+**Decisão de curto prazo**: aumentar `client_max_body_size` no nginx para destravar validação.
+**Risco**: limite alto sem governança amplia superfície de abuso (DoS por corpo grande).
+
+---
+
+## Lição 8 — Latência vs robustez: caminhos recomendados
+
+Há três estratégias viáveis, cada uma com trade-offs:
+
+### A) Conversão no cliente (WEBM→WAV) e envio ao agente (atual hotfix)
+- ✅ Corrige incompatibilidade de formato imediatamente
+- ❌ Aumenta payload e latência de upload
+- ❌ Exige ajuste de `client_max_body_size`
+
+### B) Rota separada de voz (ingestão/STT) e agente recebe texto
+- ✅ Remove blob de áudio do `/runs/stream` (menos 413 e menos acoplamento)
+- ✅ Simplifica contexto/histórico do agente
+- ❌ +1 chamada de rede (STT), pode aumentar latência ponta-a-ponta
+
+### C) Capturar/comprimir melhor na origem (quando suportado)
+- Ex.: mono, sample rate menor, limite de duração por turno
+- ✅ Reduz payload sem mudar arquitetura inteira
+- ⚠️ Depende do suporte real de browser/codec e da API alvo
+
+**Recomendação operacional**:
+1. manter hotfix para estabilizar;
+2. adicionar limite de duração no cliente (ex.: 10–20s);
+3. avaliar migração para rota separada se voz longa virar caso de uso frequente.
+
+---
+
+## Lição 9 — Decisão final: B1 (TTS dedicado), não single-call multimodal
+
+Depois das Lições 5–8, ficou claro que o sonho do ADR-028 ("uma chamada multimodal substitui 3")
+é **inviável dentro deste harness**: o LangGraph Server força streaming SSE, e o LangChain
+descarta os chunks de áudio de saída (#29776). Mesmo com `pcm16` aceito, `final_response` voltava
+`None` — confirmado nos logs: `extract_audio_response: no audio data found in N messages`.
+
+**B1** desacopla as duas pontas:
+
+```
+voz → detect_input_type → audio_agent (gpt-audio, modalities=["text"])
+    → process_audio_results → synthesize_audio_response → final_response (WAV)
+```
+
+- **Entrada**: `gpt-audio` continua entendendo a voz nativamente (STT + raciocínio numa chamada,
+  sem Whisper). Só o output muda para texto.
+- **Saída**: nó `synthesize_audio_response` chama `/audio/speech` (`gpt-4o-mini-tts`, não-streaming),
+  que devolve WAV completo. Sem `pcm16`, sem wrapper manual, sem #29776.
+
+### B1 ≠ pipeline antigo (Whisper + LLM + TTS)
+
+| Pipeline | STT | Raciocínio | TTS | Chamadas |
+|----------|-----|-----------|-----|----------|
+| Antigo (removido) | Whisper | gpt-4o-mini | TTS | 3 |
+| **B1** | gpt-audio (nativo) | mesma chamada | gpt-4o-mini-tts | **2** |
+
+B1 reintroduz **só o TTS** — não o Whisper. Mantém tool-calling e middleware no turno de voz
+(o que a alternativa "SDK cru com stream=False" perderia).
+
+### Código removido (era over-engineering relativo ao B1)
+
+`pcm16_to_wav`, a config de áudio-out do `audio_llm` (`modalities:["text","audio"]` + `format`),
+e `extract_audio_response`. Não estavam *errados* — eram a correção do caminho single-call que o B1
+abandona. Mantida a robustez de **entrada** (`normalize_input_audio_format`, `detect_audio_container`).
+
+### Validação ao vivo (2026-06-14, via nginx)
+
+6/6 runs de áudio retornaram WAV válido (19–339 KB, varia com tamanho da resposta).
+P50 áudio ~4.6–5.0s (dominado pela síntese TTS). 107 testes pytest verdes.
+
+> **Fonte do bug de saída**: [LangChain #29776](https://github.com/langchain-ai/langchain/issues/29776) —
+> "streaming fails to populate additional_kwargs containing audio data" (fev/2025, fechado sem fix).
