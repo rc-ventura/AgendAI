@@ -40,18 +40,15 @@ def test_detect_input_type_audio():
 
 # ── B10-A: audio_data clear (T052) ───────────────────────────────────────────
 
-def test_detect_input_type_audio_clears_transient_fields():
-    """B10-A (MEDIUM-01 QA fix): detect_input_type must explicitly return audio_data=None
-    and audio_format=None so LangGraph merges them into state and clears the bytes from
-    all subsequent checkpoints (Constitution VII: transient data must not persist)."""
-    state = make_state(audio_data=b"fake_audio", audio_format="wav")
+def test_detect_input_type_audio_keeps_blob_for_transcriber():
+    """detect_input_type only classifies + validates; it leaves audio_data in state
+    for transcribe_audio to consume. The transcriber clears it afterwards
+    (Constitution VII), covered by test_transcribe_audio_returns_text_human_message."""
+    state = make_state(audio_data=b"RIFF\x00\x00\x00\x00WAVEdata", audio_format="audio/wav")
     result = detect_input_type(state)
-    assert "audio_data" in result and result["audio_data"] is None, (
-        "audio_data must be explicitly returned as None to overwrite the bytes in state"
-    )
-    assert "audio_format" in result and result["audio_format"] is None, (
-        "audio_format must be explicitly returned as None to overwrite the format in state"
-    )
+    assert result["input_type"] == "audio"
+    # the blob must NOT be turned into a message here
+    assert "messages" not in result
 
 
 # ── B10-B: request_id in agent logs (T053) ───────────────────────────────────
@@ -153,11 +150,11 @@ async def test_buscar_pagamentos_tool(mock_api_client):
 
 # ── llm_core ──────────────────────────────────────────────────────────────────
 
-def test_llm_core_exports_base_and_audio_llm():
-    """B5/B7: llm_core exports base_llm and audio_llm for create_agent; no pre-bound llm needed."""
-    from agent.nodes.llm_core import base_llm, audio_llm
+def test_llm_core_exports_base_llm():
+    """llm_core exports base_llm for create_agent; the voice path uses STT/TTS
+    nodes around this same text agent (no separate audio_llm)."""
+    from agent.nodes.llm_core import base_llm
     assert base_llm is not None
-    assert audio_llm is not None
 
 
 # ── email_sender ──────────────────────────────────────────────────────────────
@@ -213,79 +210,102 @@ async def test_email_sender_cancelamento():
     assert result["email_pending"] is False
 
 
-# ── input_detector: audio → HumanMessage com input_audio content part ────────
+# ── input_detector: audio classification + validation ───────────────────────
 
-def test_detect_input_audio_creates_human_message_with_content_part():
-    """B5: detect_input_type deve criar HumanMessage com input_audio content part para áudio."""
-    import base64
+def test_detect_input_audio_classifies_and_keeps_blob():
+    """Audio payload is classified as audio and the blob stays in audio_data
+    (the transcribe_audio node consumes it; no input_audio message is built here)."""
     from agent.nodes.input_detector import detect_input_type
-    from langchain_core.messages import HumanMessage
 
-    state = make_state(audio_data=b"fake_audio_bytes", input_type="text")
+    state = make_state(audio_data=b"RIFF\x00\x00\x00\x00WAVEdata", input_type="text")
     result = detect_input_type(state)
 
     assert result["input_type"] == "audio"
-    msg = result["messages"][0]
-    assert isinstance(msg, HumanMessage)
-    assert isinstance(msg.content, list)
-    assert msg.content[0]["type"] == "input_audio"
-    # bytes corretamente codificados em base64
-    decoded = base64.b64decode(msg.content[0]["input_audio"]["data"])
-    assert decoded == b"fake_audio_bytes"
+    assert "messages" not in result
+
+
+def test_detect_input_audio_rejects_container_mismatch():
+    """A WAV-labeled payload whose bytes are actually webm must fail fast."""
+    from agent.nodes.input_detector import detect_input_type
+
+    state = make_state(audio_data=b"\x1aE\xdf\xa3webmdata", audio_format="audio/wav")
+    with pytest.raises(ValueError, match="Unsupported payload container"):
+        detect_input_type(state)
+
+
+def test_detect_input_audio_unknown_format_raises_error():
+    """Unknown format values should fail fast instead of silently relabeling."""
+    from agent.nodes.input_detector import detect_input_type
+
+    state = make_state(audio_data=b"RIFF\x00\x00\x00\x00WAVEdata", audio_format="audio/unknown")
+    with pytest.raises(ValueError, match="Unsupported input audio format"):
+        detect_input_type(state)
+
+
+def test_detect_input_audio_mismatched_format_raises_error():
+    """Payload container and declared format must match to avoid unsupported_format errors."""
+    from agent.nodes.input_detector import detect_input_type
+
+    wav_bytes = b"RIFF\x00\x00\x00\x00WAVEdata"
+    state = make_state(audio_data=wav_bytes, audio_format="audio/mp3")
+    with pytest.raises(ValueError, match="does not match payload container"):
+        detect_input_type(state)
+
+
+def test_normalize_input_audio_format_helper():
+    """Audio format normalization helper should map MIME/aliases and reject unknowns."""
+    from agent.nodes.audio import normalize_input_audio_format
+
+    assert normalize_input_audio_format("audio/wav") == "wav"
+    assert normalize_input_audio_format("mpeg") == "mp3"
+    assert normalize_input_audio_format("audio/x-wav") == "wav"
+    with pytest.raises(ValueError, match="Unsupported input audio format"):
+        normalize_input_audio_format("unknown")
 
 
 # ── B10-D: audio blob strip (agent/agent/nodes/audio.py) ─────────────────────
 
-def _audio_msg(msg_id: str | None = "audio_1") -> HumanMessage:
-    return HumanMessage(
-        id=msg_id,
-        content=[{"type": "input_audio", "input_audio": {"data": "Zm9v", "format": "wav"}}],
-    )
+def test_normalize_input_audio_format_strips_mime_and_aliases():
+    """MIME types and aliases normalise to OpenAI input_audio formats (wav/mp3)."""
+    from agent.nodes.audio import normalize_input_audio_format
+    assert normalize_input_audio_format("audio/wav") == "wav"
+    assert normalize_input_audio_format("audio/mpeg") == "mp3"
+    assert normalize_input_audio_format("x-wav") == "wav"
+    assert normalize_input_audio_format(None) == "wav"
 
 
-def test_is_input_audio_message_detects_audio_part():
-    """is_input_audio_message must recognise a HumanMessage with an input_audio part."""
-    from agent.nodes.audio import is_input_audio_message
-    assert is_input_audio_message(_audio_msg()) is True
+def test_normalize_input_audio_format_rejects_unsupported():
+    """webm/ogg are not accepted by the OpenAI audio-input flow."""
+    from agent.nodes.audio import normalize_input_audio_format
+    with pytest.raises(ValueError):
+        normalize_input_audio_format("audio/webm")
 
 
-def test_is_input_audio_message_rejects_plain_text():
-    """Plain-text HumanMessage and AIMessage must not be flagged as input_audio."""
-    from agent.nodes.audio import is_input_audio_message
-    assert is_input_audio_message(HumanMessage(content="Olá")) is False
-    assert is_input_audio_message(AIMessage(content="Oi")) is False
+def test_detect_audio_container_identifies_wav_and_webm():
+    """Magic-byte detection catches mislabeled payloads before they hit OpenAI."""
+    from agent.nodes.audio import detect_audio_container
+    wav = b"RIFF\x00\x00\x00\x00WAVEfmt "
+    webm = b"\x1aE\xdf\xa3rest"
+    assert detect_audio_container(wav) == "wav"
+    assert detect_audio_container(webm) == "webm"
 
 
-def test_strip_consumed_audio_replaces_with_text_placeholder():
-    """strip_consumed_audio must re-emit each audio message as a text placeholder
-    reusing the SAME id (so add_messages updates in-place, dropping the blob)."""
-    from agent.nodes.audio import strip_consumed_audio
+@pytest.mark.asyncio
+async def test_transcribe_audio_returns_text_human_message():
+    """transcribe_audio (STT) turns audio_data into a text HumanMessage and clears the blob."""
+    from agent.nodes import transcriber
 
-    state = make_state(messages=[_audio_msg("audio_1"), AIMessage(content="resposta")])
-    replacements = strip_consumed_audio(state)
+    fake_completion = MagicMock()
+    fake_completion.choices = [MagicMock(message=MagicMock(content="Quais horários?"))]
 
-    assert len(replacements) == 1
-    repl = replacements[0]
-    assert isinstance(repl, HumanMessage)
-    assert repl.id == "audio_1"  # same id → in-place update
-    assert repl.content == "[mensagem de voz]"
+    state = make_state(messages=[], input_type="audio", audio_data=b"RIFF0000WAVE", audio_format="audio/wav")
+    with patch.object(transcriber._openai_client.chat.completions, "create",
+                      AsyncMock(return_value=fake_completion)):
+        out = await transcriber.transcribe_audio(state)
 
-
-def test_strip_consumed_audio_noop_without_audio():
-    """No input_audio messages → no replacements."""
-    from agent.nodes.audio import strip_consumed_audio
-
-    state = make_state(messages=[HumanMessage(content="Olá"), AIMessage(content="Oi")])
-    assert strip_consumed_audio(state) == []
-
-
-def test_strip_consumed_audio_skips_audio_message_without_id():
-    """An audio message with no id cannot be updated in-place — it is skipped
-    (add_messages would append a duplicate instead of replacing)."""
-    from agent.nodes.audio import strip_consumed_audio
-
-    state = make_state(messages=[_audio_msg(msg_id=None)])
-    assert strip_consumed_audio(state) == []
+    assert out["audio_data"] is None
+    assert isinstance(out["messages"][0], HumanMessage)
+    assert out["messages"][0].content == "Quais horários?"
 
 
 # ── tools: API degradation (TST-03) ───────────────────────────────────────────

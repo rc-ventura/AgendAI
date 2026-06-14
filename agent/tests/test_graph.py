@@ -52,17 +52,10 @@ def test_bff_route_handler_sets_durability_exit():
         )
 
 
-def test_audio_llm_uses_gpt_audio_1_5_model():
-    """Audio model is pinned to gpt-audio-1.5 for deterministic behavior."""
-    from agent.nodes.llm_core import audio_llm
-
-    # ChatOpenAI wraps model name in different attrs depending on version
-    model_name = getattr(audio_llm, "model_name", None) or getattr(
-        getattr(audio_llm, "bound", None), "model_name", None
-    ) or ""
-    assert model_name == "gpt-audio-1.5", (
-        f"audio_llm must be pinned to gpt-audio-1.5, got: {model_name!r}"
-    )
+def test_transcriber_pinned_to_audio_model():
+    """STT is isolated in transcriber.py on an audio-capable model (raw, non-streaming)."""
+    from agent.nodes import transcriber
+    assert transcriber._STT_MODEL == "gpt-audio-1.5"
 
 
 def test_system_prompt_directs_parallel_lookup():
@@ -123,22 +116,27 @@ async def test_email_pending_triggers_send_email(mock_api_client):
 
 
 @pytest.mark.asyncio
-async def test_audio_path_uses_audio_llm_and_sets_final_response():
-    """US4 / B1: audio_data → detect_input_type builds input_audio msg → audio_agent
-    (gpt-audio, text out) → synthesize_audio_response calls TTS → final_response WAV.
-    Audio output comes from the dedicated TTS endpoint, not the chat model
-    (LangChain #29776 drops audio chunks on streamed chat output)."""
+async def test_audio_path_transcribes_reasons_and_synthesizes():
+    """US4: audio_data → transcribe_audio (STT) → text_agent (gpt-4o-mini) →
+    synthesize_tts → final_response WAV. STT and TTS are isolated raw calls; the
+    robust text agent does the reasoning/tool-calling."""
     from agent.graph import graph
+    from agent.nodes import transcriber, tts
 
+    fake_completion = MagicMock()
+    fake_completion.choices = [MagicMock(message=MagicMock(content="Quais horários?"))]
     mock_text_response = AIMessage(content="Temos horários disponíveis!")
     fake_wav = b"RIFF\x00\x00\x00\x00WAVEfake"
 
-    with patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_text_response)), \
-         patch("agent.graph.text_to_speech_wav", AsyncMock(return_value=fake_wav)):
+    with patch.object(transcriber._openai_client.chat.completions, "create",
+                      AsyncMock(return_value=fake_completion)), \
+         patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_text_response)), \
+         patch("agent.nodes.tts._call_tts", AsyncMock(return_value=fake_wav)):
         state = make_state(
             messages=[],
             input_type="audio",
-            audio_data=b"FAKE_AUDIO_INPUT",
+            audio_data=b"RIFF0000WAVE",
+            audio_format="audio/wav",
         )
         result = await graph.ainvoke(state, config={"configurable": {"thread_id": "test-3"}})
 
@@ -148,9 +146,9 @@ async def test_audio_path_uses_audio_llm_and_sets_final_response():
 
 
 @pytest.mark.asyncio
-async def test_synthesize_audio_response_uses_last_ai_text():
-    """B1: synthesize_audio_response feeds the final assistant text into TTS."""
-    from agent.graph import synthesize_audio_response
+async def test_synthesize_tts_uses_last_ai_text():
+    """synthesize_tts feeds the final assistant text into the TTS endpoint."""
+    from agent.nodes.tts import synthesize_tts
 
     fake_wav = b"RIFF\x00\x00\x00\x00WAVEfake"
     state = make_state(
@@ -158,11 +156,11 @@ async def test_synthesize_audio_response_uses_last_ai_text():
         input_type="audio",
     )
 
-    tts_mock = AsyncMock(return_value=fake_wav)
-    with patch("agent.graph.text_to_speech_wav", tts_mock):
-        out = await synthesize_audio_response(state)
+    call_mock = AsyncMock(return_value=fake_wav)
+    with patch("agent.nodes.tts._call_tts", call_mock):
+        out = await synthesize_tts(state)
 
-    tts_mock.assert_awaited_once_with("Sua consulta foi agendada.")
+    call_mock.assert_awaited_once_with("Sua consulta foi agendada.")
     assert out["final_response"][:4] == b"RIFF"
 
 
@@ -174,32 +172,39 @@ def _has_input_audio_part(msg) -> bool:
 
 
 @pytest.mark.asyncio
-async def test_audio_blob_stripped_after_consumption():
-    """B10-D: after the audio turn, the input_audio base64 blob must NOT remain in
-    message history (Constitution VII: transient data must not persist beyond the
-    consuming node). synthesize_audio_response replaces it with a text placeholder."""
+async def test_audio_blob_not_persisted_in_messages():
+    """Constitution VII: the raw audio blob must not persist beyond the consuming
+    node. With the STT pipeline it lives only in `audio_data` (cleared by
+    transcribe_audio); `messages` holds the text transcript, never an input_audio
+    part."""
     from agent.graph import graph
+    from agent.nodes import transcriber
 
+    fake_completion = MagicMock()
+    fake_completion.choices = [MagicMock(message=MagicMock(content="Quais horários disponíveis?"))]
     mock_text_response = AIMessage(content="Temos horários disponíveis!")
     fake_wav = b"RIFF\x00\x00\x00\x00WAVEfake"
 
-    with patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_text_response)), \
-         patch("agent.graph.text_to_speech_wav", AsyncMock(return_value=fake_wav)):
+    with patch.object(transcriber._openai_client.chat.completions, "create",
+                      AsyncMock(return_value=fake_completion)), \
+         patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_text_response)), \
+         patch("agent.nodes.tts._call_tts", AsyncMock(return_value=fake_wav)):
         state = make_state(
             messages=[],
             input_type="audio",
-            audio_data=b"FAKE_AUDIO_INPUT",
+            audio_data=b"RIFF0000WAVE",
+            audio_format="audio/wav",
         )
         result = await graph.ainvoke(state, config={"configurable": {"thread_id": "strip-audio-1"}})
 
     assert not any(_has_input_audio_part(m) for m in result["messages"]), (
-        "input_audio blob must be stripped from message history after the audio turn"
+        "no input_audio blob may appear in message history"
     )
-    # the human turn is still present as a text placeholder
+    assert result.get("audio_data") is None, "audio_data must be cleared after transcription"
     assert any(
-        isinstance(m, HumanMessage) and m.content == "[mensagem de voz]"
+        isinstance(m, HumanMessage) and m.content == "Quais horários disponíveis?"
         for m in result["messages"]
-    ), "consumed audio message must be replaced by a text placeholder"
+    ), "the transcript must be present as a text HumanMessage"
 
 
 @pytest.mark.asyncio

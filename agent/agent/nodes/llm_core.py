@@ -25,15 +25,7 @@ Regras de negócio:
 
 base_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
 
-# B1: gpt-audio understands the voice input natively (STT + reasoning in one call,
-# no separate Whisper), but replies in TEXT only. Audio output is produced by a
-# dedicated TTS node (synthesize_audio_response) — the chat model cannot return
-# audio under the server's forced SSE streaming (LangChain #29776 drops the audio
-# chunks). modalities=["text"] keeps the model from generating audio that would be
-# lost anyway. gpt-4o-mini does NOT accept audio input, so the audio path must keep
-# an audio-capable model here.
-audio_llm = ChatOpenAI(
-    model="gpt-audio-1.5",
-    temperature=0.2,
-    model_kwargs={"modalities": ["text"]},
-)
+# Voice path uses isolated STT (transcriber.py) + TTS (tts.py) around this same
+# text agent. gpt-audio was dropped from the agent loop: it cannot tool-call under
+# the server's forced SSE streaming ("invalid content") nor return audio (#29776).
+# A performant multimodal voice agent is deferred to a dedicated future spec.
