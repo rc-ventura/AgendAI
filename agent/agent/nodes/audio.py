@@ -3,44 +3,70 @@
 Keeps the audio-blob handling out of graph.py, which stays focused on wiring
 the StateGraph and the graph-level node functions.
 """
-import struct
 
 from langchain_core.messages import HumanMessage
+from openai import AsyncOpenAI
 
 from agent.state import AgendAIState
 
-# gpt-audio outputs raw PCM16 at these specs when stream=True.
-# mp3/opus/flac are only available with stream=False, which LangChain does not use.
-_WAV_SAMPLE_RATE = 24000
-_WAV_CHANNELS = 1
-_WAV_SAMPLE_WIDTH = 2  # 16-bit = 2 bytes per sample
+# B1: dedicated text-to-speech for the audio path. The /audio/speech endpoint is a
+# plain non-streaming HTTP call that returns a complete WAV container, so we avoid
+# both the PCM16 streaming constraint and LangChain #29776 (audio dropped on the
+# chat model's streamed output).
+_TTS_MODEL = "gpt-4o-mini-tts"
+_TTS_VOICE = "alloy"
+_tts_client = AsyncOpenAI()
 
 
-def pcm16_to_wav(pcm_bytes: bytes) -> bytes:
-    """Wrap raw PCM16 bytes in a RIFF/WAV container.
-
-    The WAV format is a thin header around raw PCM data. The header tells the
-    player how to interpret the bytes: sample rate (24 kHz), channels (mono),
-    and bit depth (16-bit). Without it, browsers cannot play the audio.
-
-    RIFF layout:
-        "RIFF" + file_size (4B LE) + "WAVE"
-        "fmt " + chunk_size=16 (4B) + PCM=1 (2B) + channels (2B)
-                + sample_rate (4B) + byte_rate (4B) + block_align (2B) + bits (2B)
-        "data" + data_size (4B) + <raw PCM bytes>
-    """
-    data_size = len(pcm_bytes)
-    byte_rate = _WAV_SAMPLE_RATE * _WAV_CHANNELS * _WAV_SAMPLE_WIDTH
-    block_align = _WAV_CHANNELS * _WAV_SAMPLE_WIDTH
-    header = struct.pack(
-        "<4sI4s4sIHHIIHH4sI",
-        b"RIFF", 36 + data_size, b"WAVE",
-        b"fmt ", 16, 1,  # chunk_size=16, PCM=1
-        _WAV_CHANNELS, _WAV_SAMPLE_RATE, byte_rate, block_align,
-        _WAV_SAMPLE_WIDTH * 8,
-        b"data", data_size,
+async def text_to_speech_wav(text: str) -> bytes:
+    """Synthesize `text` to speech, returning a full WAV file (bytes)."""
+    response = await _tts_client.audio.speech.create(
+        model=_TTS_MODEL,
+        voice=_TTS_VOICE,
+        input=text,
+        response_format="wav",
     )
-    return header + pcm_bytes
+    return response.content
+
+
+def normalize_input_audio_format(raw_format: str | None) -> str:
+    """Normalize caller-provided format/MIME into OpenAI `input_audio.format`.
+
+    Supported values for our Chat Completions audio-input flow: wav and mp3.
+    """
+    if not raw_format:
+        return "wav"
+
+    fmt = str(raw_format).strip().lower()
+    if "/" in fmt:
+        fmt = fmt.split("/", 1)[1]
+    if ";" in fmt:
+        fmt = fmt.split(";", 1)[0]
+
+    aliases = {
+        "mpeg": "mp3",
+        "x-wav": "wav",
+        "wave": "wav",
+    }
+    fmt = aliases.get(fmt, fmt)
+
+    allowed = {"wav", "mp3"}
+    if fmt not in allowed:
+        raise ValueError(
+            f"Unsupported input audio format '{raw_format}'. Supported formats: wav, mp3"
+        )
+    return fmt
+
+
+def detect_audio_container(audio_bytes: bytes) -> str:
+    """Best-effort detection for wav/mp3 containers to catch mislabeled payloads."""
+    if len(audio_bytes) >= 12 and audio_bytes[:4] == b"RIFF" and audio_bytes[8:12] == b"WAVE":
+        return "wav"
+    if audio_bytes[:3] == b"ID3":
+        return "mp3"
+    if len(audio_bytes) >= 2 and audio_bytes[0] == 0xFF and (audio_bytes[1] & 0xE0) == 0xE0:
+        return "mp3"
+    return "unknown"
 
 
 def is_input_audio_message(msg) -> bool:
@@ -52,21 +78,7 @@ def is_input_audio_message(msg) -> bool:
 
 
 def strip_consumed_audio(state: AgendAIState) -> list:
-    """Replace consumed input_audio HumanMessages with a lightweight text placeholder.
-
-    The base64 audio blob (~64KB for a 1.5s clip) has already been consumed by the
-    audio_agent by the time this runs. Leaving it in `messages` would persist it in
-    every downstream checkpoint and replay it to the LLM on every subsequent turn
-    (Constitution VII: transient data must not persist beyond the consuming node).
-
-    add_messages updates in-place when a returned message shares the same id, so we
-    re-emit each audio message as a text placeholder under its original id.
-
-    KNOWN LIMITATION: the transcript (actual words) is NOT preserved — the model loses
-    the content of past voice turns. Acceptable for short single-turn booking flows;
-    multi-turn voice context degrades. The documented future fix is parallel Whisper
-    transcription (see docs/learning-lessons/voice_agent_context_management.md L5/L6).
-    """
+    """Replace consumed input_audio HumanMessages with a lightweight text placeholder."""
     replacements = []
     for msg in state["messages"]:
         if is_input_audio_message(msg) and getattr(msg, "id", None):

@@ -25,15 +25,15 @@ Regras de negócio:
 
 base_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
 
-# B5 (ADR-028): gpt-audio handles transcription + synthesis in a single API call,
-# eliminating the separate transcriber.py and tts.py nodes.
+# B1: gpt-audio understands the voice input natively (STT + reasoning in one call,
+# no separate Whisper), but replies in TEXT only. Audio output is produced by a
+# dedicated TTS node (synthesize_audio_response) — the chat model cannot return
+# audio under the server's forced SSE streaming (LangChain #29776 drops the audio
+# chunks). modalities=["text"] keeps the model from generating audio that would be
+# lost anyway. gpt-4o-mini does NOT accept audio input, so the audio path must keep
+# an audio-capable model here.
 audio_llm = ChatOpenAI(
-    model="gpt-audio",
+    model="gpt-audio-1.5",
     temperature=0.2,
-    model_kwargs={
-        "modalities": ["text", "audio"],
-        # pcm16 is the only format supported when stream=True (OpenAI constraint).
-        # mp3/opus/aac/flac require stream=False, which LangChain does not use.
-        "audio": {"voice": "alloy", "format": "pcm16"},
-    },
+    model_kwargs={"modalities": ["text"]},
 )

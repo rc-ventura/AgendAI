@@ -52,16 +52,16 @@ def test_bff_route_handler_sets_durability_exit():
         )
 
 
-def test_audio_llm_uses_audio_preview_model():
-    """B5 (ADR-028): audio_llm must use gpt-4o-audio-preview — no new infra, same OPENAI_API_KEY."""
+def test_audio_llm_uses_gpt_audio_1_5_model():
+    """Audio model is pinned to gpt-audio-1.5 for deterministic behavior."""
     from agent.nodes.llm_core import audio_llm
 
     # ChatOpenAI wraps model name in different attrs depending on version
     model_name = getattr(audio_llm, "model_name", None) or getattr(
         getattr(audio_llm, "bound", None), "model_name", None
     ) or ""
-    assert "audio" in model_name, (
-        f"audio_llm must use a gpt-audio model (ADR-028 B5), got: {model_name!r}"
+    assert model_name == "gpt-audio-1.5", (
+        f"audio_llm must be pinned to gpt-audio-1.5, got: {model_name!r}"
     )
 
 
@@ -124,21 +124,17 @@ async def test_email_pending_triggers_send_email(mock_api_client):
 
 @pytest.mark.asyncio
 async def test_audio_path_uses_audio_llm_and_sets_final_response():
-    """US4 / B5: audio_data → detect_input_type builds input_audio msg → audio_agent
-    (create_agent with gpt-audio) runs loop → extract_audio_response unpacks bytes.
-    No transcriber.py or tts.py needed (ADR-028)."""
-    import base64
+    """US4 / B1: audio_data → detect_input_type builds input_audio msg → audio_agent
+    (gpt-audio, text out) → synthesize_audio_response calls TTS → final_response WAV.
+    Audio output comes from the dedicated TTS endpoint, not the chat model
+    (LangChain #29776 drops audio chunks on streamed chat output)."""
     from agent.graph import graph
 
-    fake_mp3 = b"MP3_OUTPUT"
-    b64_audio = base64.b64encode(fake_mp3).decode()
+    mock_text_response = AIMessage(content="Temos horários disponíveis!")
+    fake_wav = b"RIFF\x00\x00\x00\x00WAVEfake"
 
-    mock_audio_response = AIMessage(
-        content="Temos horários disponíveis!",
-        additional_kwargs={"audio": {"data": b64_audio, "id": "audio_x"}},
-    )
-
-    with patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_audio_response)):
+    with patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_text_response)), \
+         patch("agent.graph.text_to_speech_wav", AsyncMock(return_value=fake_wav)):
         state = make_state(
             messages=[],
             input_type="audio",
@@ -147,7 +143,27 @@ async def test_audio_path_uses_audio_llm_and_sets_final_response():
         result = await graph.ainvoke(state, config={"configurable": {"thread_id": "test-3"}})
 
     assert result["input_type"] == "audio"
-    assert result["final_response"] == fake_mp3
+    assert result["final_response"][:4] == b"RIFF"
+    assert result["final_response"][8:12] == b"WAVE"
+
+
+@pytest.mark.asyncio
+async def test_synthesize_audio_response_uses_last_ai_text():
+    """B1: synthesize_audio_response feeds the final assistant text into TTS."""
+    from agent.graph import synthesize_audio_response
+
+    fake_wav = b"RIFF\x00\x00\x00\x00WAVEfake"
+    state = make_state(
+        messages=[AIMessage(content="Sua consulta foi agendada.")],
+        input_type="audio",
+    )
+
+    tts_mock = AsyncMock(return_value=fake_wav)
+    with patch("agent.graph.text_to_speech_wav", tts_mock):
+        out = await synthesize_audio_response(state)
+
+    tts_mock.assert_awaited_once_with("Sua consulta foi agendada.")
+    assert out["final_response"][:4] == b"RIFF"
 
 
 def _has_input_audio_part(msg) -> bool:
@@ -161,19 +177,14 @@ def _has_input_audio_part(msg) -> bool:
 async def test_audio_blob_stripped_after_consumption():
     """B10-D: after the audio turn, the input_audio base64 blob must NOT remain in
     message history (Constitution VII: transient data must not persist beyond the
-    consuming node). extract_audio_response replaces it with a text placeholder."""
-    import base64
+    consuming node). synthesize_audio_response replaces it with a text placeholder."""
     from agent.graph import graph
 
-    fake_mp3 = b"MP3_OUTPUT"
-    b64_audio = base64.b64encode(fake_mp3).decode()
+    mock_text_response = AIMessage(content="Temos horários disponíveis!")
+    fake_wav = b"RIFF\x00\x00\x00\x00WAVEfake"
 
-    mock_audio_response = AIMessage(
-        content="Temos horários disponíveis!",
-        additional_kwargs={"audio": {"data": b64_audio, "id": "audio_x"}},
-    )
-
-    with patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_audio_response)):
+    with patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_text_response)), \
+         patch("agent.graph.text_to_speech_wav", AsyncMock(return_value=fake_wav)):
         state = make_state(
             messages=[],
             input_type="audio",

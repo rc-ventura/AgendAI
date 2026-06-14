@@ -58,22 +58,22 @@ def test_route_after_agent_no_email_ends():
 
 
 def test_route_after_agent_audio_no_email_ends():
-    """B5: audio path after extract_audio_response — no email → END."""
+    """B1: audio path after synthesize_audio_response — no email → END."""
     state = make_state(
         messages=[HumanMessage(content="Olá"), AIMessage(content="Temos horários!")],
         input_type="audio",
         email_pending=False,
-        final_response=b"MP3_BYTES",
+        final_response=b"RIFF\x00\x00\x00\x00WAVE",
     )
     assert route_after_agent(state) == "__end__"
 
 
 def test_route_after_agent_audio_with_email_sends_email():
-    """B5: audio path after extract_audio_response — email_pending → send_email."""
+    """B1: audio path after synthesize_audio_response — email_pending → send_email."""
     state = make_state(
         messages=[HumanMessage(content="Olá"), AIMessage(content="Agendado!")],
         input_type="audio",
         email_pending=True,
-        final_response=b"MP3_BYTES",
+        final_response=b"RIFF\x00\x00\x00\x00WAVE",
     )
     assert route_after_agent(state) == "send_email"
