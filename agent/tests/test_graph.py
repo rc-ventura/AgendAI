@@ -52,10 +52,10 @@ def test_bff_route_handler_sets_durability_exit():
         )
 
 
-def test_transcriber_pinned_to_audio_model():
-    """STT is isolated in transcriber.py on an audio-capable model (raw, non-streaming)."""
+def test_transcriber_pinned_to_whisper():
+    """STT uses Whisper — purpose-built for transcription, not a conversational model."""
     from agent.nodes import transcriber
-    assert transcriber._STT_MODEL == "gpt-audio-1.5"
+    assert transcriber._STT_MODEL == "whisper-1"
 
 
 def test_system_prompt_directs_parallel_lookup():
@@ -123,13 +123,13 @@ async def test_audio_path_transcribes_reasons_and_synthesizes():
     from agent.graph import graph
     from agent.nodes import transcriber, tts
 
-    fake_completion = MagicMock()
-    fake_completion.choices = [MagicMock(message=MagicMock(content="Quais horários?"))]
+    fake_transcript = MagicMock()
+    fake_transcript.text = "Quais horários?"
     mock_text_response = AIMessage(content="Temos horários disponíveis!")
     fake_wav = b"RIFF\x00\x00\x00\x00WAVEfake"
 
-    with patch.object(transcriber._openai_client.chat.completions, "create",
-                      AsyncMock(return_value=fake_completion)), \
+    with patch.object(transcriber._openai_client.audio.transcriptions, "create",
+                      AsyncMock(return_value=fake_transcript)), \
          patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_text_response)), \
          patch("agent.nodes.tts._call_tts", AsyncMock(return_value=fake_wav)):
         state = make_state(
@@ -180,13 +180,13 @@ async def test_audio_blob_not_persisted_in_messages():
     from agent.graph import graph
     from agent.nodes import transcriber
 
-    fake_completion = MagicMock()
-    fake_completion.choices = [MagicMock(message=MagicMock(content="Quais horários disponíveis?"))]
+    fake_transcript = MagicMock()
+    fake_transcript.text = "Quais horários disponíveis?"
     mock_text_response = AIMessage(content="Temos horários disponíveis!")
     fake_wav = b"RIFF\x00\x00\x00\x00WAVEfake"
 
-    with patch.object(transcriber._openai_client.chat.completions, "create",
-                      AsyncMock(return_value=fake_completion)), \
+    with patch.object(transcriber._openai_client.audio.transcriptions, "create",
+                      AsyncMock(return_value=fake_transcript)), \
          patch.object(BaseChatModel, "ainvoke", AsyncMock(return_value=mock_text_response)), \
          patch("agent.nodes.tts._call_tts", AsyncMock(return_value=fake_wav)):
         state = make_state(

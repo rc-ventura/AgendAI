@@ -185,20 +185,11 @@ export function Thread() {
   const handleAudio = async (blob: Blob) => {
     if (isLoading) return;
     setFirstTokenReceived(false);
-    const audioHumanMessage: Message = {
-      id: uuidv4(),
-      type: "human",
-      content: "🎙",
-    };
     const arrayBuffer = await blob.arrayBuffer();
     const audioData = Array.from(new Uint8Array(arrayBuffer));
     stream.submit(
       {
-        // audioHumanMessage ("🎙") is sent so the SDK has a messages field.
-        // transcribe_audio finds this placeholder by id and overwrites it
-        // with the transcript (same id → add_messages replaces in-place).
-        // Result: one human message showing what the user actually said.
-        messages: [audioHumanMessage],
+        messages: [],
         input_type: "audio",
         audio_data: audioData,
         audio_format: blob.type || "audio/wav",
@@ -207,10 +198,6 @@ export function Thread() {
         streamMode: ["values"],
         streamSubgraphs: true,
         streamResumable: true,
-        optimisticValues: (prev) => ({
-          ...prev,
-          messages: [...(prev.messages ?? []), audioHumanMessage],
-        }),
       },
     );
   };

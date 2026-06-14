@@ -295,12 +295,12 @@ async def test_transcribe_audio_returns_text_human_message():
     """transcribe_audio (STT) turns audio_data into a text HumanMessage and clears the blob."""
     from agent.nodes import transcriber
 
-    fake_completion = MagicMock()
-    fake_completion.choices = [MagicMock(message=MagicMock(content="Quais horários?"))]
+    fake_transcript = MagicMock()
+    fake_transcript.text = "Quais horários?"
 
     state = make_state(messages=[], input_type="audio", audio_data=b"RIFF0000WAVE", audio_format="audio/wav")
-    with patch.object(transcriber._openai_client.chat.completions, "create",
-                      AsyncMock(return_value=fake_completion)):
+    with patch.object(transcriber._openai_client.audio.transcriptions, "create",
+                      AsyncMock(return_value=fake_transcript)):
         out = await transcriber.transcribe_audio(state)
 
     assert out["audio_data"] is None
@@ -309,28 +309,26 @@ async def test_transcribe_audio_returns_text_human_message():
 
 
 @pytest.mark.asyncio
-async def test_transcribe_audio_replaces_placeholder_by_id():
-    """transcribe_audio overwrites the UI placeholder "🎙" using the same id so
-    the thread shows one message (the transcript), not two."""
+async def test_transcribe_audio_returns_human_message_with_transcript():
+    """transcribe_audio returns a HumanMessage with the Whisper transcript; no placeholder."""
     from agent.nodes import transcriber
 
-    fake_completion = MagicMock()
-    fake_completion.choices = [MagicMock(message=MagicMock(content="Quero marcar consulta"))]
+    fake_transcript = MagicMock()
+    fake_transcript.text = "Quero marcar consulta"
 
-    placeholder = HumanMessage(content="🎙", id="placeholder-uuid-123")
     state = make_state(
-        messages=[placeholder],
+        messages=[],
         input_type="audio",
         audio_data=b"RIFF0000WAVE",
         audio_format="audio/wav",
     )
-    with patch.object(transcriber._openai_client.chat.completions, "create",
-                      AsyncMock(return_value=fake_completion)):
+    with patch.object(transcriber._openai_client.audio.transcriptions, "create",
+                      AsyncMock(return_value=fake_transcript)):
         out = await transcriber.transcribe_audio(state)
 
     msg = out["messages"][0]
+    assert isinstance(msg, HumanMessage)
     assert msg.content == "Quero marcar consulta"
-    assert msg.id == "placeholder-uuid-123"  # same id → in-place replace via add_messages
 
 
 # ── tools: API degradation (TST-03) ───────────────────────────────────────────

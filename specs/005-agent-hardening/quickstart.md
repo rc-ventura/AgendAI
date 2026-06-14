@@ -72,9 +72,9 @@ docker compose up --build -d   # UI at http://localhost:8080
 
 ## Definition of done per batch
 
-- [ ] Failing-first tests written, then passing
-- [ ] 70 pytest + 39 Jest still green (FR-023)
+- [x ] Failing-first tests written, then passing
+- [x] 70 pytest + 39 Jest still green (FR-023)
 - [ ] Manual validation outcomes met (contract/quickstart)
 - [ ] **User approval received**
-- [ ] ADR created/updated; learning-lesson created/updated
-- [ ] Committed on `dev` (one batch = one commit)
+- [x] ADR created/updated; learning-lesson created/updated
+- [x] Committed on `dev` (one batch = one commit)
