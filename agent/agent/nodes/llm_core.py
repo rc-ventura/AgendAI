@@ -32,6 +32,8 @@ audio_llm = ChatOpenAI(
     temperature=0.2,
     model_kwargs={
         "modalities": ["text", "audio"],
-        "audio": {"voice": "alloy", "format": "mp3"},
+        # pcm16 is the only format supported when stream=True (OpenAI constraint).
+        # mp3/opus/aac/flac require stream=False, which LangChain does not use.
+        "audio": {"voice": "alloy", "format": "pcm16"},
     },
 )
