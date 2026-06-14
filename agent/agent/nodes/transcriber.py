@@ -33,16 +33,27 @@ async def transcribe_audio(state: AgendAIState) -> dict:
     response = await _openai_client.chat.completions.create(
         model=_STT_MODEL,
         modalities=["text"],
-        messages=[{
-            "role": "user",
-            "content": [{
-                "type": "input_audio",
-                "input_audio": {
-                    "data": base64.b64encode(audio_bytes).decode(),
-                    "format": fmt,
-                },
-            }],
-        }],
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Você é um transcritor de áudio. Transcreva exatamente o que "
+                    "o usuário disse, palavra por palavra, em português. "
+                    "Retorne apenas o texto transcrito, sem resposta, interpretação "
+                    "ou formatação adicional."
+                ),
+            },
+            {
+                "role": "user",
+                "content": [{
+                    "type": "input_audio",
+                    "input_audio": {
+                        "data": base64.b64encode(audio_bytes).decode(),
+                        "format": fmt,
+                    },
+                }],
+            },
+        ],
     )
     text = (response.choices[0].message.content or "").strip()
 
