@@ -31,7 +31,12 @@ _PHONE_REGEX = r'\b(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)(?:9\s?)?\d{4}[-\s]?\d{4}\b'
 
 pii_email = PIIMiddleware(
     "email", strategy="redact",
-    apply_to_input=True, apply_to_output=True, apply_to_tool_results=True,
+    # Email is a functional identifier (patient lookup key) — the LLM must see it
+    # to pass it to tool calls. Redacting input/output/tool_results would cause
+    # [REDACTED_EMAIL] to be used as argument, breaking buscar_agendamentos_paciente
+    # and criar_agendamento. PII protection for email lives in structlog (no body
+    # logging) and LangSmith's native trace masking, not the agent message context.
+    apply_to_input=False, apply_to_output=False, apply_to_tool_results=False,
 )
 pii_cpf = PIIMiddleware(
     "cpf", detector=_CPF_REGEX, strategy="redact",
