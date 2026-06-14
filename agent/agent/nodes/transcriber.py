@@ -45,8 +45,21 @@ async def transcribe_audio(state: AgendAIState) -> dict:
         }],
     )
     text = (response.choices[0].message.content or "").strip()
+
+    # The UI sends a "🎙" HumanMessage placeholder with a UUID. Find it and
+    # overwrite it with the transcript using the same id — the add_messages
+    # reducer replaces in-place when ids match, so the thread shows one message.
+    placeholder_id = None
+    for msg in reversed(state.get("messages", [])):
+        if isinstance(msg, HumanMessage):
+            placeholder_id = getattr(msg, "id", None)
+            break
+
     return {
-        "messages": [HumanMessage(content=text or "[áudio sem fala reconhecida]")],
+        "messages": [HumanMessage(
+            content=text or "[áudio sem fala reconhecida]",
+            id=placeholder_id,
+        )],
         "audio_data": None,
         "audio_format": None,
     }

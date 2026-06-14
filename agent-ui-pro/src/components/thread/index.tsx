@@ -194,9 +194,11 @@ export function Thread() {
     const audioData = Array.from(new Uint8Array(arrayBuffer));
     stream.submit(
       {
-        // No messages in input: transcribe_audio adds HumanMessage(transcript)
-        // server-side. audioHumanMessage lives only in optimisticValues so the
-        // user sees "🎙" while loading, then the real transcript replaces it.
+        // audioHumanMessage ("🎙") is sent so the SDK has a messages field.
+        // transcribe_audio finds this placeholder by id and overwrites it
+        // with the transcript (same id → add_messages replaces in-place).
+        // Result: one human message showing what the user actually said.
+        messages: [audioHumanMessage],
         input_type: "audio",
         audio_data: audioData,
         audio_format: blob.type || "audio/wav",

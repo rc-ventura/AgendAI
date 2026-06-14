@@ -308,6 +308,31 @@ async def test_transcribe_audio_returns_text_human_message():
     assert out["messages"][0].content == "Quais horários?"
 
 
+@pytest.mark.asyncio
+async def test_transcribe_audio_replaces_placeholder_by_id():
+    """transcribe_audio overwrites the UI placeholder "🎙" using the same id so
+    the thread shows one message (the transcript), not two."""
+    from agent.nodes import transcriber
+
+    fake_completion = MagicMock()
+    fake_completion.choices = [MagicMock(message=MagicMock(content="Quero marcar consulta"))]
+
+    placeholder = HumanMessage(content="🎙", id="placeholder-uuid-123")
+    state = make_state(
+        messages=[placeholder],
+        input_type="audio",
+        audio_data=b"RIFF0000WAVE",
+        audio_format="audio/wav",
+    )
+    with patch.object(transcriber._openai_client.chat.completions, "create",
+                      AsyncMock(return_value=fake_completion)):
+        out = await transcriber.transcribe_audio(state)
+
+    msg = out["messages"][0]
+    assert msg.content == "Quero marcar consulta"
+    assert msg.id == "placeholder-uuid-123"  # same id → in-place replace via add_messages
+
+
 # ── tools: API degradation (TST-03) ───────────────────────────────────────────
 
 @pytest.mark.asyncio
