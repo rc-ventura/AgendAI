@@ -1,9 +1,17 @@
 # ADR-028: Modelo de Áudio — gpt-4o-audio-preview Multimodal (STT + TTS unificados)
 
-**Status**: Accepted  
+**Status**: ⛔ Revertido (2026-06-14) — ver [ADR-031](./ADR-031-audio-revert-stt-tts.md)  
 **Data**: 2026-06-10  
 **Spec relacionada**: [005-agent-hardening](../../specs/005-agent-hardening/) — B5/QW-6/T020–T023  
 **SC alvo**: SC-007 (≥50% redução de latência no fluxo de áudio)
+
+> **Reversão (2026-06-14)**: A abordagem multimodal de chamada única não sobrevive ao
+> streaming SSE forçado do LangGraph Server. O `gpt-audio` descarta o áudio de saída
+> (LangChain [#29776](https://github.com/langchain-ai/langchain/issues/29776)) e lança
+> `The model produced invalid content` em turnos de fala real com tool-calling. Voltamos
+> ao pipeline STT+TTS isolado (gpt-audio só p/ STT, raw e sem streaming; gpt-4o-mini-tts
+> p/ saída) em volta do agente `gpt-4o-mini` endurecido. Detalhes em
+> [ADR-031](./ADR-031-audio-revert-stt-tts.md). Agente de voz performático → spec dedicada.
 
 ---
 

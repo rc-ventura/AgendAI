@@ -276,3 +276,33 @@ P50 áudio ~4.6–5.0s (dominado pela síntese TTS). 107 testes pytest verdes.
 
 > **Fonte do bug de saída**: [LangChain #29776](https://github.com/langchain-ai/langchain/issues/29776) —
 > "streaming fails to populate additional_kwargs containing audio data" (fev/2025, fechado sem fix).
+
+---
+
+## Lição 10 — Desfecho: B1 também caiu; voltamos ao STT+TTS isolado (ADR-031)
+
+A Lição 9 (B1) durou pouco. Com **fala real** (não a sine wave), o `gpt-audio` no loop do
+agente lançou `The model produced invalid content` — o segundo bug do streaming, agora no
+**tool-calling**, não no áudio-out. A sine wave passava porque não gerava tool calls; fala
+real gera, e quebra.
+
+**Conclusão definitiva**: o `gpt-audio` não sobrevive ao streaming forçado do servidor de
+jeito nenhum dentro do loop do agente — nem áudio-out (#29776), nem texto-out com tools.
+
+**Decisão (ADR-031)**: tirar o `gpt-audio` do loop e voltar ao **STT+TTS isolado**:
+
+```
+detect_input_type → transcribe_audio (gpt-audio, raw SDK, sem stream/tools)
+                  → text_agent (gpt-4o-mini + middleware + tools)
+                  → [send_email] → synthesize_tts (gpt-4o-mini-tts, WAV) → END
+```
+
+- STT e TTS são **chamadas diretas ao SDK OpenAI** em nós comuns — **não** são `create_agent`.
+  É justamente por ficarem fora do LangChain que escapam do streaming.
+- O agente de raciocínio (`gpt-4o-mini`) é o mesmo para texto e voz.
+- Mantida toda a robustez de entrada (webm→wav no cliente, normalize/detect, nginx body size).
+
+**Trade-off aceito**: SC-007 (≥50% redução) não é atingido por esta via — voltamos a 2–3
+chamadas. Confiabilidade > latência por ora. Agente de voz performático → **spec dedicada**.
+
+Validado ao vivo: 6/6 runs com WAV válido; 108 testes pytest verdes. Ver [ADR-031](../adr/ADR-031-audio-revert-stt-tts.md).
