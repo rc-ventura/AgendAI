@@ -100,4 +100,8 @@ services:
         value: agendai_agent
       - key: NEXT_PUBLIC_LANGGRAPH_API_KEY
         sync: false              # mesmo valor do LANGGRAPH_AUTH_TOKEN
+      - key: LANGGRAPH_API_URL
+        value: https://agendai-langgraph.onrender.com
+      - key: LANGGRAPH_AUTH_TOKEN
+        sync: false              # mesmo valor do LANGGRAPH_AUTH_TOKEN do nginx
     autoDeploy: false
