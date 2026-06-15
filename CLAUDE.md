@@ -8,6 +8,17 @@ shell commands, and other important information, read the current plan
 at specs/005-agent-hardening/plan.md
 <!-- SPECKIT END -->
 
+
+# Documentation (truth source)
+
+In @docs folder you can find the documentation for the project.
+
+In @docs/adr you can find the architectural decision records.
+
+In @docs/roadmap you can find the roadmap for the project.
+
+
+
 ## Project Overview
 
 AgendAI is a medical scheduling automation system with five components:
@@ -85,8 +96,8 @@ The agent graph is compiled in `agent/agent/graph.py` **without a checkpointer**
 - `llm_core.py` — `base_llm` (gpt-4o-mini, text) + `audio_llm` (gpt-audio, text+audio modalities)
 - `tools.py` — 6 `@tool` async functions calling the REST API via `api_client.py`; parallel tool calls enabled
 - `tool_result_processor.py` — detects create/cancel and prepares email payload
-- `email_sender.py` — Gmail SMTP with `tenacity` retry
-- `extract_audio_response` — extracts MP3 bytes from `AIMessage.additional_kwargs["audio"]`
+- `email_sender.py` — Resend HTTP API with `tenacity` retry (3x, exponential backoff)
+- `tts.py` — OpenAI TTS (voice `alloy`)
 
 **Middleware stack** (`agent/agent/middleware.py`, applied via `create_agent`):
 ```
@@ -124,6 +135,15 @@ Tests connect to a real Postgres via `DATABASE_URL`, drop + recreate schema + se
 | `LANGGRAPH_AUTH_TOKEN` | ✅ | Shared token: nginx `x-api-key` ↔ UI `NEXT_PUBLIC_LANGGRAPH_API_KEY` |
 | `API_BASE_URL` | ✅ | Internal URL of the API (agent → api, default `http://api:3000`) |
 | `PORT` | `3000` | API listen port |
-| `GMAIL_USER` / `GMAIL_APP_PASSWORD` | — | Optional SMTP for appointment emails |
+| `RESEND_API_KEY` | — | Resend HTTP API for appointment emails (replaces Gmail SMTP, blocked on Render free tier) |
+| `EMAIL_FROM` | — | Email sender address (default: `AgendAI <onboarding@resend.dev>`) |
 
 > `LANGSMITH_API_KEY` serve para os dois papéis: licença do servidor e tracing. Um único campo.
+
+## CI/CD
+
+Push para `main` dispara:
+1. `.github/workflows/ci.yml` — testa API (Postgres real) + agente (pytest). Falha bloqueia deploy.
+2. `.github/workflows/deploy.yml` — builda imagens → push GHCR → aciona 4 deploy hooks Render (api → langgraph → nginx → ui).
+
+GitHub Secrets necessários: `LANGSMITH_API_KEY`, `LANGGRAPH_AUTH_TOKEN`, `RENDER_DEPLOY_HOOK_API`, `RENDER_DEPLOY_HOOK_LANGGRAPH`, `RENDER_DEPLOY_HOOK_NGINX`, `RENDER_DEPLOY_HOOK_UI`.

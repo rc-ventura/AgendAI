@@ -28,7 +28,7 @@ deploy, the persistence guarantee, and the real-DB test gate alike).
 
 **Purpose**: Obtain managed dependencies and swap the data-layer dependency.
 
-- [ ] T001 Provision managed dependencies (record connection strings into a local untracked `.env`): Neon project with two databases `agendai_app` → `DATABASE_URL` and `agendai_lg` → `DATABASE_URI`; Upstash Redis → `REDIS_URI`; LangSmith Developer → `LANGSMITH_API_KEY` (license) + `LANGCHAIN_API_KEY` (tracing). Reference `specs/004-fase-1-deploy/contracts/render-blueprint.md`
+- [X] T001 Provision managed dependencies (record connection strings into a local untracked `.env`): Neon project with two databases `agendai_app` → `DATABASE_URL` and `agendai_lg` → `DATABASE_URI`; Upstash Redis → `REDIS_URI`; LangSmith Developer → `LANGSMITH_API_KEY` (license) + `LANGCHAIN_API_KEY` (tracing). Reference `specs/004-fase-1-deploy/contracts/render-blueprint.md`
 - [X] T002 [P] In `api/package.json`, remove `better-sqlite3` and add `pg` (`^8`); keep all other deps
 - [X] T003 [P] Update `.env.example` to add `DATABASE_URL`, `DATABASE_URI`, `REDIS_URI`, `LANGSMITH_API_KEY` and document the new topology; keep existing keys (`OPENAI_API_KEY`, `LANGCHAIN_*`, `GMAIL_*`, `LANGGRAPH_AUTH_TOKEN`, `API_BASE_URL`)
 - [X] T004 [P] Confirm `.env` is gitignored (it is, line 2) and add a local Postgres for dev/test by appending `postgres:16` + `redis` services to `docker-compose.yml` (dev-parity only; expose Postgres on `5432` locally for the test runner)
@@ -99,14 +99,14 @@ scheduling flow end to end; confirm an appointment + confirmation (quickstart.md
 - [X] T031 [US1] Rewrite `nginx/nginx.conf.template` into a path-routing reverse proxy: `location /` → `agent-ui-pro:3002` (incl. `/_next/...` and WebSocket upgrade); `location ~ ^/(threads|runs|assistants|store|info)` → `langgraph-server:8123` keeping `x-api-key` auth + `limit_req` + `proxy_buffering off`; **scope auth/rate-limit to the agent location only** (UI/assets unauthenticated); remove the `map $http_origin`/CORS block (research D7)
 - [X] T032 [US1] Update `docker-compose.yml`: swap the `agent` build for the `langgraph-server` image with env `DATABASE_URI`/`REDIS_URI`/`LANGSMITH_API_KEY`/`LANGCHAIN_API_KEY`/`OPENAI_API_KEY`/`API_BASE_URL`; point `api` at local `postgres` via `DATABASE_URL`; make **nginx the only service publishing a host port**; `agent-ui-pro` and `langgraph-server` no longer publish ports
 - [X] T033 [US1] Set `agent-ui-pro` build arg `NEXT_PUBLIC_API_URL` to the nginx origin (same-origin); keep `NEXT_PUBLIC_ASSISTANT_ID=agendai_agent` and `NEXT_PUBLIC_LANGGRAPH_API_KEY=${LANGGRAPH_AUTH_TOKEN}`
-- [ ] T034 [US1] Local verify: `docker compose up --build -d` brings up api + postgres + redis + langgraph-server + nginx + agent-ui-pro; open the app through nginx; complete a text and an audio scheduling flow; confirm streaming is not buffered (quickstart.md §1)
+- [X] T034 [US1] Local verify: `docker compose up --build -d` brings up api + postgres + redis + langgraph-server + nginx + agent-ui-pro; open the app through nginx; complete a text and an audio scheduling flow; confirm streaming is not buffered (quickstart.md §1)
 
 ### Render deploy
 
 - [X] T035 [US1] Create `infra/render/render.yaml` Blueprint per `contracts/render-blueprint.md`: `nginx` public; `api`, `langgraph-server`, `agent-ui-pro` private; correct ports and `sync:false` env keys
 - [X] T036 [US1] Add `infra/render/README.md` documenting how to create Neon (2 DBs) + Upstash + LangSmith and paste secrets into Render
-- [ ] T037 [US1] Deploy the Blueprint to Render; set all `sync:false` env vars; set `agent-ui-pro` build args (`NEXT_PUBLIC_API_URL` = public nginx URL); confirm first boot creates the API schema+seed in `agendai_app` and the server schema in `agendai_lg`
-- [ ] T038 [US1] Public end-to-end verify from a clean machine: open the public URL, complete a text + audio scheduling flow, confirm appointment + confirmation (SC-001)
+- [X] T037 [US1] Deploy the Blueprint to Render; set all `sync:false` env vars; set `agent-ui-pro` build args (`NEXT_PUBLIC_API_URL` = public nginx URL); confirm first boot creates the API schema+seed in `agendai_app` and the server schema in `agendai_lg`
+- [X] T038 [US1] Public end-to-end verify from a clean machine: open the public URL, complete a text + audio scheduling flow, confirm appointment + confirmation (SC-001)
 
 **Checkpoint**: Public URL serves a working AgendAI end to end. MVP delivered.
 
@@ -121,9 +121,9 @@ redeploy `api`); reopen the thread and re-query the appointment — both survive
 
 **Depends on**: Phase 2 (durable API data) + T029/T032 (server-backed checkpointer).
 
-- [ ] T039 [US2] Confirm idempotent startup: redeploy/restart `api` and verify schema runs without error and seed does **not** duplicate rows (count-guard) (FR-007)
-- [ ] T040 [US2] Local persistence test: with `docker compose` up, create an appointment and an in-progress thread; `docker compose restart langgraph-server`; reopen the thread → prior messages intact; re-query the appointment → still present (validates Postgres checkpointer, gap P2)
-- [ ] T041 [US2] Production persistence test: trigger a Render redeploy of `api` + `langgraph-server`; confirm previously created appointments remain retrievable and an active thread still shows prior messages (SC-002)
+- [X] T039 [US2] Confirm idempotent startup: redeploy/restart `api` and verify schema runs without error and seed does **not** duplicate rows (count-guard) (FR-007)
+- [X] T040 [US2] Local persistence test: with `docker compose` up, create an appointment and an in-progress thread; `docker compose restart langgraph-server`; reopen the thread → prior messages intact; re-query the appointment → still present (validates Postgres checkpointer, gap P2)
+- [X] T041 [US2] Production persistence test: trigger a Render redeploy of `api` + `langgraph-server`; confirm previously created appointments remain retrievable and an active thread still shows prior messages (SC-002)
 
 **Checkpoint**: State durability proven locally and in production.
 
@@ -141,9 +141,9 @@ green unblocks (quickstart §5 #4).
 
 - [X] T042 [US3] Create `.github/workflows/ci.yml` per `contracts/ci-cd.md`: `test-api` job with a `postgres:16` service + `DATABASE_URL` → `cd api && npm ci && npm test`; `test-agent` job with `astral-sh/setup-uv` → `cd agent && uv run pytest --tb=short`; triggers on `push` + `pull_request`
 - [X] T043 [US3] Create `.github/workflows/deploy.yml` per `contracts/ci-cd.md`: on push to `main`, log in to GHCR, `langgraph build` + push the agent image, `docker build` + push `api`/`nginx`/`agent-ui-pro`, then `curl` the `RENDER_DEPLOY_HOOK`
-- [ ] T044 [US3] Add GitHub secret `RENDER_DEPLOY_HOOK` (Render deploy hook URL); confirm GHCR `packages: write` permission is granted to the workflow
-- [ ] T045 [US3] Enable branch protection on `main` requiring `test-api` + `test-agent` to pass before merge (FR-010)
-- [ ] T046 [US3] Verify the gate: open a PR with a deliberately failing test → CI red, merge blocked; revert the break → CI green, merge allowed; confirm merge to `main` runs `deploy.yml` and the public URL serves the new build (SC-003, SC-004)
+- [X] T044 [US3] Add GitHub secret `RENDER_DEPLOY_HOOK` (Render deploy hook URL); confirm GHCR `packages: write` permission is granted to the workflow
+- [X] T045 [US3] Enable branch protection on `main` requiring `test-api` + `test-agent` to pass before merge (FR-010)
+- [X] T046 [US3] Verify the gate: open a PR with a deliberately failing test → CI red, merge blocked; revert the break → CI green, merge allowed; confirm merge to `main` runs `deploy.yml` and the public URL serves the new build (SC-003, SC-004)
 
 **Checkpoint**: Tests gate every change; passing merges auto-deploy.
 
@@ -159,9 +159,9 @@ enforced at the agent path.
 
 **Depends on**: T031 (nginx routing), T035 (render private services).
 
-- [ ] T047 [US4] Verify in `infra/render/render.yaml` that `api`, `langgraph-server`, and `agent-ui-pro` are private (no public URL) and only `nginx` is public; fix any service type that exposes a public route
-- [ ] T048 [US4] Verify auth scoping: requesting the UI/static assets through nginx needs no `x-api-key`, while agent paths (`/threads`,`/runs`,…) require it and are rate-limited; confirm SSE streams unbuffered (FR-004)
-- [ ] T049 [US4] Attempt to reach `api` and `langgraph-server` directly from the public internet and confirm there is no route (SC-007); confirm same-origin works with the CORS block removed
+- [X] T047 [US4] Verify in `infra/render/render.yaml` that `api`, `langgraph-server`, and `agent-ui-pro` are private (no public URL) and only `nginx` is public; fix any service type that exposes a public route
+- [X] T048 [US4] Verify auth scoping: requesting the UI/static assets through nginx needs no `x-api-key`, while agent paths (`/threads`,`/runs`,…) require it and are rate-limited; confirm SSE streams unbuffered (FR-004)
+- [X] T049 [US4] Attempt to reach `api` and `langgraph-server` directly from the public internet and confirm there is no route (SC-007); confirm same-origin works with the CORS block removed
 
 **Checkpoint**: Public surface reduced to the single gateway, verified.
 
@@ -176,8 +176,8 @@ LangSmith (quickstart §5 #6).
 
 **Depends on**: Phase 3 (agent deployed).
 
-- [ ] T050 [US5] Confirm tracing env on the deployed `langgraph-server`: `LANGCHAIN_TRACING_V2=true`, `LANGCHAIN_API_KEY`, `LANGCHAIN_PROJECT=AgendAI` (render-blueprint.md)
-- [ ] T051 [US5] Run a production conversation; confirm a trace including the agent's tool calls appears in the LangSmith dashboard; capture a screenshot for the README (SC-008, FR-018)
+- [X] T050 [US5] Confirm tracing env on the deployed `langgraph-server`: `LANGSMITH_TRACING=true`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT=AgendAI` (render-blueprint.md)
+- [X] T051 [US5] Run a production conversation; confirm a trace including the agent's tool calls appears in the LangSmith dashboard; capture a screenshot for the README (SC-008, FR-018)
 
 **Checkpoint**: Production behavior is observable.
 
@@ -187,11 +187,11 @@ LangSmith (quickstart §5 #6).
 
 **Purpose**: Secrets finalization, documentation, and cleanup spanning all stories.
 
-- [ ] T052 [P] Finalize secrets migration: confirm no secret values are committed anywhere added by this feature; all runtime secrets live in Render env vars and all CI secrets in GitHub Secrets (FR-014/SC-006)
-- [ ] T053 [P] Update `README.md`: CI status badge (green), production URL, and the LangSmith traces screenshot from T051 (FR-019)
-- [ ] T054 [P] Update `CLAUDE.md` body to reflect SQLite→Postgres (`pg`), the LangGraph Server (Option B) topology, nginx single-edge routing, and the new env vars (the SPECKIT plan pointer is already set)
-- [ ] T055 [P] Remove dead references to `better-sqlite3`/`DB_PATH`/SQLite from docs and any leftover comments; ensure `.env.example` matches the deployed env matrix exactly
-- [ ] T056 Run the full `quickstart.md` verification table (checks #1–#7) end to end and confirm every Success Criterion (SC-001…SC-009) is met
+- [X] T052 [P] Finalize secrets migration: confirm no secret values are committed anywhere added by this feature; all runtime secrets live in Render env vars and all CI secrets in GitHub Secrets (FR-014/SC-006)
+- [X] T053 [P] Update `README.md`: CI status badge (green), production URL, and the LangSmith traces screenshot from T051 (FR-019)
+- [X] T054 [P] Update `CLAUDE.md` body to reflect SQLite→Postgres (`pg`), the LangGraph Server (Option B) topology, nginx single-edge routing, and the new env vars (the SPECKIT plan pointer is already set)
+- [X] T055 [P] Remove dead references to `better-sqlite3`/`DB_PATH`/SQLite from docs and any leftover comments; ensure `.env.example` matches the deployed env matrix exactly
+- [X] T056 Run the full `quickstart.md` verification table (checks #1–#7) end to end and confirm every Success Criterion (SC-001…SC-009) is met
 
 ---
 

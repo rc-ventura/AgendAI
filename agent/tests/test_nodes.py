@@ -21,6 +21,7 @@ def make_state(**kwargs) -> AgendAIState:
         "email_pending": False,
         "email_payload": None,
         "final_response": None,
+        "processed_tool_ids": [],
     }
     defaults.update(kwargs)
     return defaults
@@ -176,9 +177,8 @@ async def test_email_sender_agendamento():
         },
     )
 
-    with patch("agent.nodes.email_sender.smtplib.SMTP_SSL") as mock_smtp:
-        mock_smtp.return_value.__enter__ = MagicMock(return_value=MagicMock())
-        mock_smtp.return_value.__exit__ = MagicMock(return_value=False)
+    with patch("agent.nodes.email_sender.resend.Emails.send") as mock_send:
+        mock_send.return_value = {"id": "test-id"}
         result = await send_email(state)
 
     assert result["email_pending"] is False
@@ -202,9 +202,8 @@ async def test_email_sender_cancelamento():
         },
     )
 
-    with patch("agent.nodes.email_sender.smtplib.SMTP_SSL") as mock_smtp:
-        mock_smtp.return_value.__enter__ = MagicMock(return_value=MagicMock())
-        mock_smtp.return_value.__exit__ = MagicMock(return_value=False)
+    with patch("agent.nodes.email_sender.resend.Emails.send") as mock_send:
+        mock_send.return_value = {"id": "test-id"}
         result = await send_email(state)
 
     assert result["email_pending"] is False
@@ -381,7 +380,7 @@ async def test_email_sender_continues_after_smtp_failure():
         },
     )
 
-    with patch("agent.nodes.email_sender._send_smtp", side_effect=Exception("SMTP connection refused")):
+    with patch("agent.nodes.email_sender._send_resend", side_effect=Exception("Resend API error")):
         result = await send_email(state)
 
     # System MUST continue: email_pending cleared even when email fails
@@ -558,10 +557,10 @@ async def test_api_circuit_breaker_opens_after_3_transport_failures():
 
 
 @pytest.mark.asyncio
-async def test_email_sender_no_duplicate_on_smtp_retry():
-    """Contract #5 (FR-006): a retry around SMTP must not send duplicate emails.
-    _send_smtp is called exactly once per send_email invocation — tenacity retries
-    are internal to _send_smtp itself, so send_email never calls it twice.
+async def test_email_sender_no_duplicate_on_resend_retry():
+    """Contract #5 (FR-006): a retry around Resend must not send duplicate emails.
+    _send_resend is called exactly once per send_email invocation — tenacity retries
+    are internal to _send_resend itself, so send_email never calls it twice.
     """
     from agent.nodes.email_sender import send_email
 
@@ -578,10 +577,10 @@ async def test_email_sender_no_duplicate_on_smtp_retry():
         },
     )
 
-    with patch("agent.nodes.email_sender._send_smtp") as mock_smtp:
-        mock_smtp.return_value = None
+    with patch("agent.nodes.email_sender._send_resend") as mock_resend:
+        mock_resend.return_value = None
         await send_email(state)
         await send_email({**state, "email_pending": True})  # second invocation
 
-    # Each call to send_email must dispatch to _send_smtp exactly once
-    assert mock_smtp.call_count == 2  # 1 per invocation, never 2x for the same invocation
+    # Each call to send_email must dispatch to _send_resend exactly once
+    assert mock_resend.call_count == 2  # 1 per invocation, never 2x for the same invocation

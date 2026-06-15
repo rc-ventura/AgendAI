@@ -1,4 +1,20 @@
-limit_req_zone $binary_remote_addr zone=agent_limit:10m rate=20r/m;
+# CF-Connecting-IP contains the real client IP set by Cloudflare (Render uses CF as CDN).
+# $binary_remote_addr is always 127.0.0.1 on Render (internal loopback routing),
+# which would make all users share one bucket — using CF header fixes per-user limiting.
+map $http_cf_connecting_ip $rate_limit_key {
+    default $http_cf_connecting_ip;
+    ""      $binary_remote_addr;     # fallback para Docker local (sem Cloudflare)
+}
+limit_req_zone $rate_limit_key zone=agent_limit:10m rate=60r/m;
+
+# Defer upstream DNS resolution to request time so nginx starts even if
+# downstream services are still booting (common on Render free tier).
+# Local Docker Compose: NGINX_RESOLVER=127.0.0.11 (Docker embedded DNS)
+# Render free tier:     NGINX_RESOLVER=1.1.1.1 8.8.8.8 (public DNS for public URLs)
+resolver ${NGINX_RESOLVER} valid=30s ipv6=off;
+
+# Required for HTTPS upstreams (Render public URLs use SNI-based SSL).
+proxy_ssl_server_name on;
 
 server {
     listen 8080;
@@ -36,15 +52,21 @@ server {
         }
 
         # Rate limiting: 20 req/min, burst de 10 sem delay
-        limit_req        zone=agent_limit burst=10 nodelay;
+        limit_req        zone=agent_limit burst=30 nodelay;
         limit_req_status 429;
 
         # SSE: desabilita buffering para streaming token-a-token
-        proxy_buffering  off;
-        proxy_cache      off;
-        proxy_set_header Connection "";
+        proxy_buffering           off;
+        proxy_cache               off;
+        proxy_set_header          Connection "";
+        chunked_transfer_encoding off;
+        gzip                      off;
+        proxy_max_temp_file_size  0;
 
-        proxy_pass http://langgraph-server:8123;
+        # LANGGRAPH_UPSTREAM must be a variable for resolver-based deferred lookup.
+        # Full URL including scheme: http://... (local) or https://... (Render).
+        set $langgraph_upstream "${LANGGRAPH_UPSTREAM}";
+        proxy_pass $langgraph_upstream;
     }
 
     # ── Chat UI (Next.js) — everything else ──────────────────────────────────
@@ -54,6 +76,18 @@ server {
         proxy_set_header Connection "upgrade";
 
         proxy_buffering off;
-        proxy_pass http://agent-ui-pro:3002;
+        # Full URL including scheme: http://... (local) or https://... (Render).
+        set $ui_upstream "${UI_UPSTREAM}";
+        proxy_pass $ui_upstream;
+
+        # Se a UI retornar 429 (Render free tier hibernando), exibe página de espera
+        # em vez de repassar o 429 ao browser.
+        proxy_intercept_errors on;
+        error_page 429 503 502 /warming.html;
+    }
+
+    location = /warming.html {
+        root /usr/share/nginx/html;
+        internal;
     }
 }

@@ -119,6 +119,9 @@ services:
       - "8080:8080"
     environment:
       - LANGGRAPH_AUTH_TOKEN=${LANGGRAPH_AUTH_TOKEN}
+      - NGINX_RESOLVER=127.0.0.11
+      - UI_UPSTREAM=http://agent-ui-pro:3002
+      - LANGGRAPH_UPSTREAM=http://langgraph-server:8123
     depends_on:
       - agent-ui-pro
       - langgraph-server

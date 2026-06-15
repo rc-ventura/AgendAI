@@ -22,8 +22,14 @@ services:
     envVars:
       - key: LANGGRAPH_AUTH_TOKEN
         sync: false
+      - key: NGINX_RESOLVER
+        value: "1.1.1.1 8.8.8.8"
+      - key: LANGGRAPH_UPSTREAM
+        value: https://agendai-langgraph.onrender.com
+      - key: UI_UPSTREAM
+        value: https://agendai-ui.onrender.com
     healthCheckPath: /health
-    autoDeployTrigger: off
+    autoDeploy: false
 
   # ── API Express (Node.js) ────────────────────────────────────────────────────
   - type: web
@@ -37,8 +43,8 @@ services:
         value: "3000"
       - key: DATABASE_URL
         sync: false   # Neon: postgres://...@.../agendai_app?sslmode=require
-    healthCheckPath: /horarios/disponiveis
-    autoDeployTrigger: off
+    healthCheckPath: /health
+    autoDeploy: false
 
   # ── LangGraph Server ─────────────────────────────────────────────────────────
   # Imagem publicada no GHCR pelo deploy.yml via: langgraph build
@@ -51,7 +57,9 @@ services:
     runtime: image
     image:
       url: ghcr.io/rc-ventura/agendai-agent:latest
-      creds: ghcr-rc-ventura
+      creds:
+        fromRegistryCreds:
+          name: ghcr-rc-ventura
     envVars:
       - key: PORT
         value: "8123"
@@ -70,12 +78,13 @@ services:
       - key: OPENAI_API_KEY
         sync: false
       - key: API_BASE_URL
-        value: http://agendai-api:3000   # hostname interno do Render (mesmo nome do serviço)
-      - key: GMAIL_USER
-        sync: false
-      - key: GMAIL_APP_PASSWORD
-        sync: false
-    autoDeployTrigger: off
+        value: https://agendai-api-kaou.onrender.com
+      - key: RESEND_API_KEY
+        sync: false   # Resend dashboard → API Keys (substitui Gmail SMTP, bloqueado no free tier)
+      - key: EMAIL_FROM
+        sync: false   # ex: AgendAI <contato@seudominio.com> (default: onboarding@resend.dev)
+    healthCheckPath: /ok
+    autoDeploy: false
 
   # ── Chat UI Next.js ──────────────────────────────────────────────────────────
   - type: web
@@ -86,9 +95,9 @@ services:
     dockerContext: ./agent-ui-pro
     envVars:
       - key: NEXT_PUBLIC_API_URL
-        value: ""                # vazio = same-origin (nginx serve a UI)
+        value: https://agendai-nginx.onrender.com
       - key: NEXT_PUBLIC_ASSISTANT_ID
         value: agendai_agent
       - key: NEXT_PUBLIC_LANGGRAPH_API_KEY
         sync: false              # mesmo valor do LANGGRAPH_AUTH_TOKEN
-    autoDeployTrigger: off
+    autoDeploy: false
