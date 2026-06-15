@@ -21,6 +21,9 @@ const limiter = rateLimit({
 function createApp(pool) {
   const app = express();
 
+  // Trust the first proxy (nginx) so express-rate-limit reads X-Forwarded-For correctly
+  app.set('trust proxy', 1);
+
   app.use(requestId);
   app.use(express.json());
 
