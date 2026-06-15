@@ -8,7 +8,11 @@ Contract for `AgendAIState` evolution. The state is the harness's data interface
 ## Invariants
 
 - Changes are **additive only** — no existing field removed or retyped (protects thread
-  compatibility and the `_sanitize_messages` guard in `llm_core.py`).
+  compatibility). The orphaned-ToolMessage guard formerly in `llm_core.py`
+  (`_sanitize_messages`) was removed with the `create_agent` migration (ADR-026): the
+  chat+tools loop now lives inside the `text_agent` subgraph, which owns the
+  `AIMessage`/`ToolMessage` lifecycle. External messages entering the subgraph are
+  `HumanMessage`s only.
 - `messages` keeps `add_messages` reducer semantics (whether as `TypedDict` or `MessagesState`).
 - New fields default to `None`/empty so existing in-flight threads remain valid.
 
@@ -42,4 +46,6 @@ Contract for `AgendAIState` evolution. The state is the harness's data interface
 
 1. An existing thread created before a field is added still loads (additive compatibility).
 2. After B3, durable checkpoint rows per turn drop ≥80% (SC-006) with resume still working.
-3. `_sanitize_messages` continues to strip orphaned ToolMessages (no regression).
+3. The `text_agent` subgraph (create_agent) keeps the `AIMessage`/`ToolMessage` sequence
+   consistent when a thread is reloaded from a checkpoint — a turn does not fail with an
+   orphaned-ToolMessage 400 (this guard was previously `_sanitize_messages`).
