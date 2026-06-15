@@ -326,3 +326,98 @@ def test_pii_middlewares_in_llm_middleware():
     assert "email" in pii_types, "PIIMiddleware for email must be in LLM_MIDDLEWARE"
     assert "cpf" in pii_types, "PIIMiddleware for cpf must be in LLM_MIDDLEWARE"
     assert "phone" in pii_types, "PIIMiddleware for phone must be in LLM_MIDDLEWARE"
+
+
+# ── 7. PII output sanitizer (issue #11) ───────────────────────────────────────
+
+def test_cpf_output_does_not_leak_content_blocks_or_redacted_token():
+    """Issue #11: CPF in a content-block list output must be masked inline as clean
+    text — never the serialized list nor the internal [REDACTED_CPF] token."""
+    from agent.pii_output import PIIOutputSanitizerMiddleware, CPF_MASK
+
+    mw = PIIOutputSanitizerMiddleware()
+    # Model returns structured content blocks (the exact shape that triggers the leak)
+    state = _make_state(
+        HumanMessage(content="meu cpf é 123.456.789-00"),
+        AIMessage(content=[{"type": "text", "text": "Seu CPF 123.456.789-00 foi recebido."}]),
+    )
+
+    result = mw.after_model(state, MagicMock())
+
+    assert result is not None
+    content = result["messages"][-1].content
+    assert isinstance(content, str), "output must be flattened to plain text"
+    assert "123.456.789-00" not in content, "real CPF must not be exposed"
+    assert "[REDACTED_CPF]" not in content, "internal redaction token must not leak"
+    assert "{'text'" not in content and "[{" not in content, "content blocks must not leak"
+    assert CPF_MASK in content
+
+
+def test_leaked_redacted_cpf_token_is_replaced_with_mask():
+    """If the LLM echoes a [REDACTED_CPF] token (from redacted input), mask it."""
+    from agent.pii_output import PIIOutputSanitizerMiddleware, CPF_MASK
+
+    mw = PIIOutputSanitizerMiddleware()
+    state = _make_state(
+        HumanMessage(content="ok"),
+        AIMessage(content="Confirmo o CPF [REDACTED_CPF] no cadastro."),
+    )
+
+    result = mw.after_model(state, MagicMock())
+
+    assert result is not None
+    content = result["messages"][-1].content
+    assert "[REDACTED_CPF]" not in content
+    assert CPF_MASK in content
+
+
+def test_phone_output_masked_inline():
+    from agent.pii_output import PIIOutputSanitizerMiddleware, PHONE_MASK
+
+    mw = PIIOutputSanitizerMiddleware()
+    state = _make_state(
+        HumanMessage(content="ok"),
+        AIMessage(content="Seu telefone (11) 91234-5678 está registrado."),
+    )
+
+    result = mw.after_model(state, MagicMock())
+
+    assert result is not None
+    content = result["messages"][-1].content
+    assert "91234-5678" not in content
+    assert PHONE_MASK in content
+
+
+def test_output_without_pii_is_untouched():
+    """No PII → middleware returns None and leaves content blocks intact."""
+    from agent.pii_output import PIIOutputSanitizerMiddleware
+
+    mw = PIIOutputSanitizerMiddleware()
+    state = _make_state(
+        HumanMessage(content="quero agendar"),
+        AIMessage(content=[{"type": "text", "text": "Claro! Aqui estão os horários."}]),
+    )
+
+    assert mw.after_model(state, MagicMock()) is None
+
+
+def test_pii_output_sanitizer_in_llm_middleware():
+    from agent.pii_output import PIIOutputSanitizerMiddleware
+    from agent.middleware import LLM_MIDDLEWARE
+
+    assert any(isinstance(m, PIIOutputSanitizerMiddleware) for m in LLM_MIDDLEWARE), (
+        "PIIOutputSanitizerMiddleware must be wired into LLM_MIDDLEWARE (issue #11)"
+    )
+
+
+def test_cpf_phone_output_redaction_disabled_on_builtin():
+    """CPF/phone output redaction moved to the sanitizer; built-in must not redact output
+    (that path stringifies content blocks and leaks the token — issue #11)."""
+    from langchain.agents.middleware import PIIMiddleware
+    from agent.middleware import LLM_MIDDLEWARE
+
+    for m in LLM_MIDDLEWARE:
+        if isinstance(m, PIIMiddleware) and m.pii_type in {"cpf", "phone"}:
+            assert m.apply_to_output is False, (
+                f"{m.pii_type} PIIMiddleware must not apply_to_output (issue #11)"
+            )

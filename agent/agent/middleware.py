@@ -17,6 +17,7 @@ Summarization comes after PII so the summary is generated from already-redacted 
 from langchain.agents.middleware import PIIMiddleware, SummarizationMiddleware
 
 from agent.guardrails import injection_guard_middleware
+from agent.pii_output import CPF_REGEX, PHONE_REGEX, pii_output_sanitizer
 from agent.resilience import (
     api_circuit_breaker_middleware,
     llm_circuit_breaker_middleware,
@@ -25,9 +26,6 @@ from agent.resilience import (
 )
 
 # ── PII middleware (built-in, custom detectors for CPF and phone) ─────────────
-
-_CPF_REGEX = r'\b\d{3}\.?\d{3}\.?\d{3}[-.]?\d{2}\b'
-_PHONE_REGEX = r'\b(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)(?:9\s?)?\d{4}[-\s]?\d{4}\b'
 
 pii_email = PIIMiddleware(
     "email", strategy="redact",
@@ -38,13 +36,17 @@ pii_email = PIIMiddleware(
     # logging) and LangSmith's native trace masking, not the agent message context.
     apply_to_input=False, apply_to_output=False, apply_to_tool_results=False,
 )
+# CPF/phone output redaction is handled by PIIOutputSanitizerMiddleware (issue #11):
+# the built-in redact strategy stringifies content blocks and leaks the internal
+# [REDACTED_CPF] token to the client. Here we only redact input + tool results,
+# which never reach the user directly.
 pii_cpf = PIIMiddleware(
-    "cpf", detector=_CPF_REGEX, strategy="redact",
-    apply_to_input=True, apply_to_output=True, apply_to_tool_results=True,
+    "cpf", detector=CPF_REGEX, strategy="redact",
+    apply_to_input=True, apply_to_output=False, apply_to_tool_results=True,
 )
 pii_phone = PIIMiddleware(
-    "phone", detector=_PHONE_REGEX, strategy="redact",
-    apply_to_input=True, apply_to_output=True, apply_to_tool_results=True,
+    "phone", detector=PHONE_REGEX, strategy="redact",
+    apply_to_input=True, apply_to_output=False, apply_to_tool_results=True,
 )
 
 # ── Context manager ─────────────────────────────────────────────
@@ -59,8 +61,9 @@ summarization_middleware = SummarizationMiddleware(
 LLM_MIDDLEWARE = [
     injection_guard_middleware,       # (ADR-029): injection + off-scope block
     pii_email,                        # (ADR-029): email redaction (built-in PIIMiddleware)
-    pii_cpf,                          # (ADR-029): CPF redaction (custom detector)
-    pii_phone,                        # (ADR-029): phone redaction (custom detector)
+    pii_cpf,                          # (ADR-029): CPF redaction — input + tool results
+    pii_phone,                        # (ADR-029): phone redaction — input + tool results
+    pii_output_sanitizer,             # (issue #11): mask CPF/phone inline in final output
     summarization_middleware,         # (ADR-030): context window management
     llm_circuit_breaker_middleware,
     _llm_retry_middleware,

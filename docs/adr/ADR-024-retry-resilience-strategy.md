@@ -278,6 +278,12 @@ O `CircuitBreaker` emite logs Python estruturados em três eventos:
 | Call bloqueada (circuito aberto) | WARNING | `circuit_breaker=blocked remaining=Xs` |
 | Circuito fecha (sucesso após OPEN) | INFO | `circuit_breaker=closed` |
 
+> **Nota sobre `circuit_breaker=closed`:** este log é emitido **apenas na recuperação** —
+> quando havia falhas acumuladas (`_fails > 0`, ver `agent/agent/resilience.py:53-57`) e
+> uma chamada bem-sucedida fecha o circuito. Em operação normal sem falhas anteriores
+> (caminho feliz, `_fails == 0`), esse log **não aparece** — e isso é correto por design.
+> Não use a ausência de `circuit_breaker=closed` como sinal de problema.
+
 Esses logs aparecem no `docker compose logs langgraph-server` e, via LangSmith callback,
 nas traces do agente quando `LANGSMITH_TRACING=true`.
 

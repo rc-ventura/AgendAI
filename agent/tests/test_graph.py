@@ -59,13 +59,19 @@ def test_transcriber_pinned_to_whisper():
     assert transcriber._STT_MODEL == "whisper-1"
 
 
-def test_system_prompt_directs_parallel_lookup():
-    """B2 (QW-4): Prompt must instruct simultaneous buscar_horarios + buscar_paciente
-    in round 1 to drive the scheduling flow down to ≤2 LLM rounds."""
+def test_system_prompt_forbids_parallel_lookup():
+    """Issue #12: prompt must NOT instruct parallel buscar_horarios + buscar_paciente.
+
+    buscar_paciente must run first and its result (patient found / not found) gates
+    the rest of the scheduling flow, so the two lookups cannot be fired in parallel.
+    """
     from agent.nodes.llm_core import SYSTEM_PROMPT
     lower = SYSTEM_PROMPT.lower()
-    assert "simultane" in lower or "ao mesmo tempo" in lower, (
-        "SYSTEM_PROMPT must instruct simultaneous tool lookups in round 1 (QW-4 B2)"
+    assert "simultane" not in lower, (
+        "SYSTEM_PROMPT must not instruct simultaneous tool lookups (issue #12)"
+    )
+    assert "não chame ferramentas em paralelo" in lower or "uma ferramenta por vez" in lower, (
+        "SYSTEM_PROMPT must instruct sequential tool calls (issue #12)"
     )
 
 
