@@ -1,9 +1,15 @@
 # ADR-027: Latency Tactics — B1 Parallel Tool Calls + B2 Round Reduction
 
-**Status**: Accepted  
+**Status**: Accepted (parcialmente superada para o fluxo de agendamento — ver nota)  
 **Date**: 2026-06-10  
 **Spec**: 005-agent-hardening  
 **Batch**: B1 (this record) → B2 (round reduction, to be appended after B2 commit)
+
+> **Nota (2026-06-15, issue #12 / [ADR-033](./ADR-033-issue-fixes-pii-output-logging-tool-sequencing.md)):**
+> a chamada **simultânea** de `buscar_horarios_disponiveis` + `buscar_paciente` (QW-4/B2) foi
+> revertida **apenas para o fluxo de agendamento**: as duas chamadas têm dependência lógica
+> (`buscar_paciente` decide se o fluxo continua), então o paralelismo era incoerente. O system
+> prompt agora exige sequenciamento. As demais táticas de latência deste ADR seguem válidas.
 
 ---
 

@@ -57,6 +57,8 @@ que invalidariam a decisão.
 | [ADR-029](./ADR-029-guardrails.md) | Guardrails: InjectionGuardMiddleware + PIIMiddleware | ✅ Accepted | [005](../../specs/005-agent-hardening/) |
 | [ADR-030](./ADR-030-context-management.md) | Context management: SummarizationMiddleware com trigger OR | ✅ Accepted | [005](../../specs/005-agent-hardening/) |
 | [ADR-031](./ADR-031-structured-logging.md) | Structured logging e correlation ID (nginx → API → LangSmith) | ✅ Accepted | [005](../../specs/005-agent-hardening/) |
+| [ADR-032](./ADR-032-audio-revert-stt-tts.md) | Reverter áudio multimodal para STT+TTS isolados | ✅ Accepted | [005](../../specs/005-agent-hardening/) |
+| [ADR-033](./ADR-033-issue-fixes-pii-output-logging-tool-sequencing.md) | Correções pós-spec-005: saída PII (#11), sequenciamento de ferramentas (#12), nível de log (#13) | ✅ Accepted | [005](../../specs/005-agent-hardening/) |
 
 
 ## Como adicionar um novo ADR

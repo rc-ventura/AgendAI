@@ -102,6 +102,32 @@ def test_logger_request_id_defaults_to_dash():
     )
 
 
+def test_configure_logging_enforces_level_when_handlers_exist():
+    """Issue #13: when uvicorn already installed root handlers, configure_logging()
+    must still enforce INFO. Otherwise agent INFO logs vanish if the server's default
+    level is above INFO."""
+    from agent.logging_config import configure_logging
+
+    root = logging.getLogger()
+    saved_handlers = root.handlers[:]
+    saved_level = root.level
+    try:
+        # Simulate uvicorn: a pre-existing handler and a level above INFO.
+        root.handlers = [logging.StreamHandler()]
+        root.setLevel(logging.WARNING)
+
+        configure_logging()
+
+        assert root.level == logging.INFO, (
+            "configure_logging must set INFO even when handlers already exist (issue #13)"
+        )
+        # Must not duplicate handlers when uvicorn already provided one.
+        assert len(root.handlers) == 1
+    finally:
+        root.handlers = saved_handlers
+        root.setLevel(saved_level)
+
+
 # ── tools ─────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

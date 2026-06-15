@@ -38,13 +38,19 @@ pii_email = PIIMiddleware(
     # logging) and LangSmith's native trace masking, not the agent message context.
     apply_to_input=False, apply_to_output=False, apply_to_tool_results=False,
 )
+# Output redaction is intentionally OFF (issue #11): the built-in redact path does
+# str(message.content), which serializes content blocks and leaks both the internal
+# [REDACTED_CPF] token and the list structure to the client. Input redaction already
+# strips the CPF before the model sees it, so the model cannot echo a real CPF; the
+# system prompt forbids displaying CPF or redaction tokens. We keep input + tool
+# results redaction (those never reach the user directly).
 pii_cpf = PIIMiddleware(
     "cpf", detector=_CPF_REGEX, strategy="redact",
-    apply_to_input=True, apply_to_output=True, apply_to_tool_results=True,
+    apply_to_input=True, apply_to_output=False, apply_to_tool_results=True,
 )
 pii_phone = PIIMiddleware(
     "phone", detector=_PHONE_REGEX, strategy="redact",
-    apply_to_input=True, apply_to_output=True, apply_to_tool_results=True,
+    apply_to_input=True, apply_to_output=False, apply_to_tool_results=True,
 )
 
 # ── Context manager ─────────────────────────────────────────────
@@ -59,8 +65,8 @@ summarization_middleware = SummarizationMiddleware(
 LLM_MIDDLEWARE = [
     injection_guard_middleware,       # (ADR-029): injection + off-scope block
     pii_email,                        # (ADR-029): email redaction (built-in PIIMiddleware)
-    pii_cpf,                          # (ADR-029): CPF redaction (custom detector)
-    pii_phone,                        # (ADR-029): phone redaction (custom detector)
+    pii_cpf,                          # (ADR-029): CPF redaction — input + tool results
+    pii_phone,                        # (ADR-029): phone redaction — input + tool results
     summarization_middleware,         # (ADR-030): context window management
     llm_circuit_breaker_middleware,
     _llm_retry_middleware,

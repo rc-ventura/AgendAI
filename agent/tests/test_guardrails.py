@@ -326,3 +326,36 @@ def test_pii_middlewares_in_llm_middleware():
     assert "email" in pii_types, "PIIMiddleware for email must be in LLM_MIDDLEWARE"
     assert "cpf" in pii_types, "PIIMiddleware for cpf must be in LLM_MIDDLEWARE"
     assert "phone" in pii_types, "PIIMiddleware for phone must be in LLM_MIDDLEWARE"
+
+
+# ── 7. PII output redaction disabled on built-in (issue #11) ──────────────────
+
+def test_cpf_phone_output_redaction_disabled_on_builtin():
+    """Issue #11: CPF/phone PIIMiddleware must NOT apply_to_output.
+
+    The built-in output redaction path does str(message.content), which serializes
+    content blocks and leaks both the [REDACTED_CPF] token and the list structure to
+    the client. Input redaction already strips the CPF before the model sees it."""
+    from langchain.agents.middleware import PIIMiddleware
+    from agent.middleware import LLM_MIDDLEWARE
+
+    cpf_phone = [
+        m for m in LLM_MIDDLEWARE
+        if isinstance(m, PIIMiddleware) and m.pii_type in {"cpf", "phone"}
+    ]
+    assert len(cpf_phone) == 2, "CPF and phone PIIMiddleware must be wired in LLM_MIDDLEWARE"
+    for m in cpf_phone:
+        assert m.apply_to_output is False, (
+            f"{m.pii_type} PIIMiddleware must not apply_to_output (issue #11)"
+        )
+        assert m.apply_to_input is True, f"{m.pii_type} must still redact input"
+        assert m.apply_to_tool_results is True, f"{m.pii_type} must still redact tool results"
+
+
+def test_system_prompt_forbids_displaying_cpf_tokens():
+    """Issue #11: prompt must instruct the model never to display CPF / redaction tokens."""
+    from agent.nodes.llm_core import SYSTEM_PROMPT
+    lower = SYSTEM_PROMPT.lower()
+    assert "cpf" in lower and "[redacted_cpf]" in lower, (
+        "SYSTEM_PROMPT must forbid displaying CPF and redaction tokens (issue #11)"
+    )
