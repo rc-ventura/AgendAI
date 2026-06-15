@@ -11,21 +11,22 @@ _EMAIL_TOOLS = {"criar_agendamento", "cancelar_agendamento"}
 
 
 def _find_last_email_tool_call(state: AgendAIState) -> tuple[str, str] | tuple[None, None]:
-    """Returns (tool_name, tool_call_id) for an email-triggering tool call in the
-    CURRENT execution round only.
+    """Returns (tool_name, tool_call_id) for the most recent email-triggering
+    tool call that has not yet been processed.
 
-    Only the most recent AIMessage with tool_calls is inspected. If that message
-    does not contain any email-triggering tool call, we return (None, None)
-    immediately instead of scanning older messages — otherwise tool calls from
-    previous turns (already processed) would be re-detected and cause duplicate
-    emails to be sent.
+    With create_agent, the chat+tools loop runs to completion before this node
+    executes, so a single turn can contain several rounds of tool calls (e.g.
+    criar_agendamento in round 2, buscar_pagamentos in round 3). We must scan
+    ALL AIMessages — not just the last one — or an email trigger from an earlier
+    round is silently dropped. Duplicate emails are prevented by skipping
+    tool_call_ids already in processed_tool_ids (idempotency guard).
     """
+    processed = set(state.get("processed_tool_ids") or [])
     for msg in reversed(state["messages"]):
         if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
             for tc in msg.tool_calls:
-                if tc.get("name") in _EMAIL_TOOLS:
+                if tc.get("name") in _EMAIL_TOOLS and tc["id"] not in processed:
                     return tc["name"], tc["id"]
-            return None, None
     return None, None
 
 
