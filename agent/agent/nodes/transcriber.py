@@ -10,6 +10,7 @@ import io
 from langchain_core.messages import HumanMessage
 from openai import AsyncOpenAI
 
+from agent.nodes.audio import normalize_input_audio_format
 from agent.state import AgendAIState
 
 _STT_MODEL = "whisper-1"
@@ -22,9 +23,12 @@ async def transcribe_audio(state: AgendAIState) -> dict:
         return {}
     audio_bytes = bytes(raw) if isinstance(raw, list) else raw
 
+    # Label the upload with its real container so Whisper does not reject an
+    # MP3 payload that was hardcoded as WAV (the pipeline allows wav and mp3).
+    fmt = normalize_input_audio_format(state.get("audio_format"))
     transcript = await _openai_client.audio.transcriptions.create(
         model=_STT_MODEL,
-        file=("audio.wav", io.BytesIO(audio_bytes), "audio/wav"),
+        file=(f"audio.{fmt}", io.BytesIO(audio_bytes), f"audio/{fmt}"),
         language="pt",
     )
     text = (transcript.text or "").strip()
