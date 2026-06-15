@@ -28,10 +28,7 @@ Este ADR registra as decisões tomadas para cada uma.
 
 ## Decisão
 
-### #11 — Sanitização de PII na saída via middleware dedicado
-
-A redação de saída de CPF/telefone sai do `PIIMiddleware` built-in e passa a ser feita
-por um `PIIOutputSanitizerMiddleware` (`agent/agent/pii_output.py`).
+### #11 — Desligar a redação de PII na saída (sem middleware novo)
 
 **Causa raiz:** `PIIMiddleware.after_model` faz `str(message.content)`. Quando o modelo
 retorna *content blocks* (lista `[{"type": "text", "text": ...}]`), o `str()` serializa
@@ -39,19 +36,19 @@ a lista inteira; a regex então redige o CPF dentro dessa string e o cliente rec
 `[{'text': '[REDACTED_CPF]', 'type': 'text'}]` — vazando tanto a estrutura interna quanto
 o token `[REDACTED_*]`.
 
-**Solução:** o novo middleware, posicionado após os `PIIMiddleware` no stack:
-1. Achata os content blocks em texto puro (sem vazar a lista serializada);
-2. Mascara CPF/telefone **inline** (`***.***.***-**`, `(**) *****-****`), mantendo a
-   mensagem legível;
-3. Substitui qualquer token `[REDACTED_CPF]`/`[REDACTED_PHONE]` que o LLM tenha ecoado.
+**Solução (mínima):** setar `apply_to_output=False` em `pii_cpf`/`pii_phone`
+(`agent/agent/middleware.py`). A redação de **input** e **tool results** continua no
+built-in. Como o input é redatado **antes** do modelo ver, o modelo nunca recebe um CPF
+real e, portanto, não tem como ecoá-lo na saída — a redação de saída era, na prática,
+redundante e era justamente o caminho que serializava os content blocks. Uma linha no
+system prompt (`agent/agent/nodes/llm_core.py`) reforça: nunca exibir CPF nem repetir
+tokens internos de redação.
 
-Só atua quando há PII na mensagem — respostas normais com content blocks passam intactas.
-`apply_to_output=False` foi setado em `pii_cpf`/`pii_phone`; a redação de **input** e
-**tool results** continua no built-in (esses caminhos não chegam ao usuário diretamente).
-
-> Por que mask inline e não uma mensagem genérica ("dados ocultos"): preserva o resto da
-> resposta e a usabilidade, conforme a opção (b) sugerida na issue. O CPF real nunca é
-> exposto e o token interno nunca vaza.
+**Por que não um middleware de sanitização de saída:** foi considerado (achatar content
+blocks + mascarar inline `***.***.***-**`), mas adiciona uma classe/arquivo para um caminho
+que já é coberto pela redação de input + prompt. Optou-se pela solução mais simples; o
+risco residual (modelo repetir literalmente `[REDACTED_CPF]` visto no input) é mitigado
+pelo prompt.
 
 ### #12 — Sequenciamento de ferramentas no agendamento (reverte parallel lookup do ADR-027 para este fluxo)
 
@@ -91,6 +88,10 @@ A tabela de observabilidade do ADR-024 ganhou uma nota explicitando que
 
 - **#11 — usar `strategy="mask"` do built-in:** ainda passaria pelo `str(content)` e
   vazaria a estrutura de content blocks; não resolve a causa raiz.
+- **#11 — middleware de sanitização de saída (`PIIOutputSanitizerMiddleware`):** mais
+  robusto (achata content blocks, mascara inline, limpa tokens ecoados), mas adiciona uma
+  classe/arquivo para um caminho já coberto por input-redaction + prompt. Descartado em
+  favor da solução mínima.
 - **#12 — desabilitar `parallel_tool_calls` no modelo:** o paralelismo aqui era guiado
   pelo prompt (não há flag setado no código atual), então ajustar o prompt é suficiente e
   menos invasivo. A reestruturação do grafo foi deferida para a spec 006.
@@ -101,8 +102,10 @@ A tabela de observabilidade do ADR-024 ganhou uma nota explicitando que
 
 ## Consequências
 
-- **#11:** saída sempre em texto limpo; CPF/telefone mascarados inline; nenhuma estrutura
-  interna ou token de redação vaza. Coberto por testes em `tests/test_guardrails.py` (seção 7).
+- **#11:** a estrutura de content blocks nunca mais é serializada na saída (o gatilho do bug
+  era o output-redaction do built-in). Sem código novo. Risco residual: o modelo repetir o
+  token `[REDACTED_CPF]` visto no input — mitigado pelo system prompt. Coberto por testes em
+  `tests/test_guardrails.py` (seção 7).
 - **#12:** +1 round de LLM no agendamento (sequencial em vez de paralelo) em troca de um
   fluxo coerente para "paciente não encontrado". Decisão arquitetural final pendente na spec 006.
 - **#13:** nível INFO garantido independ. da ordem de import do servidor; logs de
