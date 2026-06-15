@@ -88,6 +88,7 @@ function ScrollToBottom(props: { className?: string }) {
   );
 }
 
+
 export function Thread() {
   const [artifactContext, setArtifactContext] = useArtifactContext();
   const [artifactOpen, closeArtifact] = useArtifactOpen();
@@ -184,33 +185,21 @@ export function Thread() {
   const handleAudio = async (blob: Blob) => {
     if (isLoading) return;
     setFirstTokenReceived(false);
-    const audioHumanMessage: Message = {
-      id: uuidv4(),
-      type: "human",
-      content: "🎙",
-    };
-    try {
-      const arrayBuffer = await blob.arrayBuffer();
-      const audioData = Array.from(new Uint8Array(arrayBuffer));
-      stream.submit(
-        {
-          messages: [audioHumanMessage],
-          input_type: "audio",
-          audio_data: audioData,
-        } as any,
-        {
-          streamMode: ["values"],
-          streamSubgraphs: true,
-          streamResumable: true,
-          optimisticValues: (prev) => ({
-            ...prev,
-            messages: [...(prev.messages ?? []), audioHumanMessage],
-          }),
-        },
-      );
-    } catch {
-      toast.error("Erro ao processar áudio. Tente novamente.");
-    }
+    const arrayBuffer = await blob.arrayBuffer();
+    const audioData = Array.from(new Uint8Array(arrayBuffer));
+    stream.submit(
+      {
+        messages: [],
+        input_type: "audio",
+        audio_data: audioData,
+        audio_format: blob.type || "audio/wav",
+      } as any,
+      {
+        streamMode: ["values"],
+        streamSubgraphs: true,
+        streamResumable: true,
+      },
+    );
   };
 
   const audio = useAudio({ onAudio: handleAudio, disabled: isLoading });
@@ -278,7 +267,10 @@ export function Thread() {
     const lastAiMsg = [...stream.messages].reverse().find((m) => m.type === "ai");
     if (!lastAiMsg?.id) return;
 
-    const blob = new Blob([bytes], { type: "audio/mpeg" });
+    // Re-wrap to a Uint8Array backed by ArrayBuffer (not SharedArrayBuffer),
+    // which satisfies BlobPart typing on newer TypeScript libs.
+    const blobBytes = new Uint8Array(bytes);
+    const blob = new Blob([blobBytes], { type: "audio/wav" });
     const url = URL.createObjectURL(blob);
     setTtsAudioMap((prev) => {
       const msgId = lastAiMsg.id!;

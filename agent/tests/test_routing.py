@@ -1,9 +1,8 @@
 """TST-07 — Unit tests for graph routing functions."""
-import pytest
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from langchain_core.messages import HumanMessage, AIMessage
 
 from agent.state import AgendAIState
-from agent.graph import route_after_input, route_after_llm, route_after_email
+from agent.graph import route_after_input, route_after_agent, route_after_email
 
 
 def make_state(**kwargs) -> AgendAIState:
@@ -11,6 +10,7 @@ def make_state(**kwargs) -> AgendAIState:
         "messages": [HumanMessage(content="Olá")],
         "input_type": "text",
         "audio_data": None,
+        "audio_format": None,
         "session_id": "test-routing",
         "email_pending": False,
         "email_payload": None,
@@ -22,74 +22,67 @@ def make_state(**kwargs) -> AgendAIState:
 
 # ── route_after_input ─────────────────────────────────────────────────────────
 
-def test_route_after_input_text():
+def test_route_after_input_text_goes_to_text_agent():
     state = make_state(input_type="text")
-    assert route_after_input(state) == "chat_with_llm"
+    assert route_after_input(state) == "text_agent"
 
 
-def test_route_after_input_audio():
+def test_route_after_input_audio_goes_to_transcribe():
     state = make_state(input_type="audio")
     assert route_after_input(state) == "transcribe_audio"
 
 
-# ── route_after_llm ───────────────────────────────────────────────────────────
-
-def test_route_after_llm_tool_calls():
-    ai_msg = AIMessage(content="", tool_calls=[
-        {"id": "call_1", "name": "buscar_horarios_disponiveis", "args": {}}
-    ])
-    state = make_state(messages=[HumanMessage(content="Olá"), ai_msg])
-    assert route_after_llm(state) == "execute_tools"
+def test_route_after_input_default_is_text_agent():
+    """Missing input_type defaults to text path."""
+    state = make_state()
+    state.pop("input_type", None)
+    assert route_after_input(state) == "text_agent"
 
 
-def test_route_after_llm_email_pending():
-    ai_msg = AIMessage(content="Consulta agendada!")
+# ── route_after_agent ─────────────────────────────────────────────────────────
+
+def test_route_after_agent_email_pending_sends_email():
     state = make_state(
-        messages=[HumanMessage(content="Olá"), ai_msg],
+        messages=[HumanMessage(content="Olá"), AIMessage(content="Agendado!")],
         email_pending=True,
     )
-    assert route_after_llm(state) == "send_email"
+    assert route_after_agent(state) == "send_email"
 
 
-def test_route_after_llm_audio_synthesize():
-    ai_msg = AIMessage(content="Temos horários disponíveis!")
+def test_route_after_agent_no_email_ends():
     state = make_state(
-        messages=[HumanMessage(content="Olá"), ai_msg],
+        messages=[HumanMessage(content="Olá"), AIMessage(content="Resposta final.")],
+        email_pending=False,
+    )
+    assert route_after_agent(state) == "__end__"
+
+
+def test_route_after_agent_audio_no_email_synthesizes():
+    """Audio turn with no email → synthesize TTS before ending."""
+    state = make_state(
+        messages=[HumanMessage(content="Olá"), AIMessage(content="Temos horários!")],
         input_type="audio",
         email_pending=False,
     )
-    assert route_after_llm(state) == "synthesize_tts"
+    assert route_after_agent(state) == "synthesize_tts"
 
 
-def test_route_after_llm_text_ends():
-    ai_msg = AIMessage(content="Resposta final.")
+def test_route_after_agent_audio_with_email_sends_email_first():
+    """email_pending takes priority; TTS happens after send_email (route_after_email)."""
     state = make_state(
-        messages=[HumanMessage(content="Olá"), ai_msg],
-        input_type="text",
-        email_pending=False,
-    )
-    assert route_after_llm(state) == "__end__"
-
-
-def test_route_after_llm_tool_calls_take_priority_over_email():
-    """tool_calls must be routed to execute_tools even when email_pending is True."""
-    ai_msg = AIMessage(content="", tool_calls=[
-        {"id": "call_2", "name": "criar_agendamento", "args": {}}
-    ])
-    state = make_state(
-        messages=[HumanMessage(content="Olá"), ai_msg],
+        messages=[HumanMessage(content="Olá"), AIMessage(content="Agendado!")],
+        input_type="audio",
         email_pending=True,
     )
-    assert route_after_llm(state) == "execute_tools"
+    assert route_after_agent(state) == "send_email"
 
 
-# ── route_after_email ─────────────────────────────────────────────────────────
-
-def test_route_after_email_audio_synthesize():
-    state = make_state(input_type="audio")
+def test_route_after_email_audio_synthesizes():
+    """After sending the email, an audio turn still needs the spoken reply."""
+    state = make_state(input_type="audio", email_pending=True)
     assert route_after_email(state) == "synthesize_tts"
 
 
 def test_route_after_email_text_ends():
-    state = make_state(input_type="text")
+    state = make_state(input_type="text", email_pending=True)
     assert route_after_email(state) == "__end__"

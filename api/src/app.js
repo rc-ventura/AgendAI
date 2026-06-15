@@ -1,5 +1,6 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
+const requestId = require('./middlewares/requestId');
 const requestLogger = require('./middlewares/requestLogger');
 const errorHandler = require('./middlewares/errorHandler');
 const horariosRouter = require('./routes/horarios');
@@ -20,6 +21,7 @@ const limiter = rateLimit({
 function createApp(pool) {
   const app = express();
 
+  app.use(requestId);
   app.use(express.json());
 
   // Health check — must be before rate limiter so Render probes never count against the limit

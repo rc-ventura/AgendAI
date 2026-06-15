@@ -1,3 +1,6 @@
+'use strict';
+const { withDbRetry } = require('../db/withRetry');
+
 function createAgendamentosRepository(pool) {
   const SELECT_AGENDAMENTO = `
     SELECT a.id, a.status, a.criado_em,
@@ -12,26 +15,28 @@ function createAgendamentosRepository(pool) {
   `;
 
   async function findById(id, exec = pool) {
-    const { rows } = await exec.query(SELECT_AGENDAMENTO, [id]);
+    const { rows } = await withDbRetry(() => exec.query(SELECT_AGENDAMENTO, [id]));
     return rows[0];
   }
 
   async function findByIdWithStatus(id, exec = pool) {
-    const { rows } = await exec.query(
+    const { rows } = await withDbRetry(() => exec.query(
       'SELECT id, status, horario_id FROM agendamentos WHERE id = $1', [id]
-    );
+    ));
     return rows[0];
   }
 
   async function create(pacienteId, horarioId, status = 'ativo', exec = pool) {
-    return exec.query(
+    return withDbRetry(() => exec.query(
       'INSERT INTO agendamentos (paciente_id, horario_id, status) VALUES ($1, $2, $3) RETURNING id',
       [pacienteId, horarioId, status]
-    );
+    ));
   }
 
   async function updateStatus(id, status, exec = pool) {
-    return exec.query('UPDATE agendamentos SET status = $1 WHERE id = $2', [status, id]);
+    return withDbRetry(() => exec.query(
+      'UPDATE agendamentos SET status = $1 WHERE id = $2', [status, id]
+    ));
   }
 
   async function findByPacienteEmail(email, status = null, exec = pool) {
@@ -47,10 +52,14 @@ function createAgendamentosRepository(pool) {
       WHERE p.email = $1
     `;
     if (status) {
-      const { rows } = await exec.query(base + ' AND a.status = $2 ORDER BY h.data_hora ASC', [email, status]);
+      const { rows } = await withDbRetry(() => exec.query(
+        base + ' AND a.status = $2 ORDER BY h.data_hora ASC', [email, status]
+      ));
       return rows;
     }
-    const { rows } = await exec.query(base + ' ORDER BY h.data_hora ASC', [email]);
+    const { rows } = await withDbRetry(() => exec.query(
+      base + ' ORDER BY h.data_hora ASC', [email]
+    ));
     return rows;
   }
 

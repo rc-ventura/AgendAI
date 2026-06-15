@@ -76,6 +76,11 @@ async function checkGraphStatus(
   }
 }
 
+function buildBffUrl(base: string): string {
+  const trimmed = base.replace(/\/+$/, "");
+  return trimmed.endsWith("/api") ? trimmed : `${trimmed}/api`;
+}
+
 const StreamSession = ({
   children,
   apiKey,
@@ -91,8 +96,9 @@ const StreamSession = ({
 }) => {
   const [threadId, setThreadId] = useQueryState("threadId");
   const { getThreads, setThreads } = useThreads();
+  const bffApiUrl = buildBffUrl(apiUrl);
   const streamValue = useTypedStream({
-    apiUrl,
+    apiUrl: bffApiUrl,
     apiKey: apiKey ?? undefined,
     assistantId,
     ...(authScheme && {
@@ -125,7 +131,7 @@ const StreamSession = ({
   });
 
   useEffect(() => {
-    checkGraphStatus(apiUrl, apiKey, authScheme).then((ok) => {
+    checkGraphStatus(bffApiUrl, apiKey, authScheme).then((ok) => {
       if (!ok) {
         toast.error("Não foi possível conectar ao assistente.", {
           description: () => (
@@ -144,7 +150,7 @@ const StreamSession = ({
         });
       }
     });
-  }, [apiKey, apiUrl, authScheme]);
+  }, [apiKey, apiUrl, authScheme, bffApiUrl]);
 
   return (
     <StreamContext.Provider value={streamValue}>

@@ -48,6 +48,17 @@ que invalidariam a decisão.
 | [ADR-019](./ADR-019-agent-ui.md) | Agent UI open-source da LangChain como interface de chat | ✅ Accepted | [002](../../specs/002-langgraph-orchestration/), [003](../../specs/003-professional-chat-ui/) |
 | [ADR-020](./ADR-020-docker-compose.md) | Docker Compose como plataforma de orquestração de containers | ✅ Accepted | [001](../../specs/001-n8n-medical-scheduling/), [002](../../specs/002-langgraph-orchestration/) |
 | [ADR-021](./ADR-021-langsmith-observability.md) | LangSmith como plataforma de observabilidade para tracing do agente | ✅ Accepted | [002](../../specs/002-langgraph-orchestration/) |
+| [ADR-022](./ADR-022-bff-nextjs-token-security.md) | BFF Next.js para segurança do token do LangGraph | ✅ Accepted | [003](../../specs/003-professional-chat-ui/) |
+| [ADR-024](./ADR-024-retry-resilience-strategy.md) | Estratégia de retry e resiliência (agent + API) | ✅ Accepted | [005](../../specs/005-agent-hardening/) |
+| [ADR-025](./ADR-025-langgraph-checkpoint-strategy.md) | Estratégia de checkpoint do LangGraph em produção | ✅ Accepted | [005](../../specs/005-agent-hardening/) |
+| [ADR-026](./ADR-026-create-agent-middleware-vs-manual.md) | Modernização do core agêntico: `create_agent` + middleware vs. nós manuais | ✅ Accepted | [005](../../specs/005-agent-hardening/) |
+| [ADR-027](./ADR-027-latency-tactics.md) | Táticas de redução de latência: parallel tool calls + prompt compactation | ✅ Accepted | [005](../../specs/005-agent-hardening/) |
+| [ADR-028](./ADR-028-audio-model.md) | Modelo de áudio: `gpt-audio` multimodal (single-call) | ✅ Accepted | [005](../../specs/005-agent-hardening/) |
+| [ADR-029](./ADR-029-guardrails.md) | Guardrails: InjectionGuardMiddleware + PIIMiddleware | ✅ Accepted | [005](../../specs/005-agent-hardening/) |
+| [ADR-030](./ADR-030-context-management.md) | Context management: SummarizationMiddleware com trigger OR | ✅ Accepted | [005](../../specs/005-agent-hardening/) |
+| [ADR-031](./ADR-031-structured-logging.md) | Structured logging e correlation ID (nginx → API → LangSmith) | ✅ Accepted | [005](../../specs/005-agent-hardening/) |
+| [ADR-032](./ADR-032-audio-revert-stt-tts.md) | Reverter áudio multimodal para STT+TTS isolados | ✅ Accepted | [005](../../specs/005-agent-hardening/) |
+| [ADR-033](./ADR-033-issue-fixes-pii-output-logging-tool-sequencing.md) | Correções pós-spec-005: saída PII (#11), sequenciamento de ferramentas (#12), nível de log (#13) | ✅ Accepted | [005](../../specs/005-agent-hardening/) |
 
 
 ## Como adicionar um novo ADR

@@ -44,7 +44,7 @@ export function useTtsPlayer() {
 
     setAudioUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
-      const blob = new Blob([bytes], { type: "audio/mpeg" });
+      const blob = new Blob([bytes], { type: "audio/wav" });
       return URL.createObjectURL(blob);
     });
   }, [stream.isLoading, (stream as any).values?.final_response]);

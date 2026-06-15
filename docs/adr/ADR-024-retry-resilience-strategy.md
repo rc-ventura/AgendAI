@@ -1,8 +1,8 @@
 # ADR-024 — Estratégia de Retry e Resiliência (Agent + API)
 
-**Status:** Proposto — implementação mapeada na Spec 005 (P1)
+**Status:** Implementado (B6 — 2026-06-10 · API-side B6 — 2026-06-11) — aguarda commit manual
 
-**Data:** 2026-06-03
+**Data:** 2026-06-03 | **Última atualização:** 2026-06-10
 
 **Relacionado a:** [Spec 005 — Agent Hardening](../../specs/005-agent-hardening/spec.md)
 
@@ -233,3 +233,165 @@ Funciona apenas com axios. A API usa `pg` (driver Postgres) diretamente, não ax
 - **Spec 005 P1**: esta é a decisão técnica que embasa as tasks de implementação do P1.
 - **Spec 005 P3** (Guardrails): circuit breaker em `llm_core.py` é o precursor — mesmo ponto
   de extensão onde os guardrails de input serão adicionados.
+
+---
+
+## Notas de Implementação (B6 — 2026-06-10)
+
+### Desvio: pybreaker → CircuitBreaker customizado
+
+O ADR original especificava `pybreaker` como circuit breaker. Na implementação, `pybreaker 1.4.1`
+usa `@gen.coroutine` do Tornado para suporte async — incompatível com asyncio puro. A lib foi
+removida e substituída por uma classe `CircuitBreaker` de ~30 linhas em `agent/agent/resilience.py`.
+
+Ver learning lesson completa: `docs/learning-lessons/circuit_breaker_custom_vs_libs.md`
+
+Esta abordagem é consistente com o que a comunidade de agentes de IA faz em produção: toda
+referência encontrada usa implementações customizadas, não libs genéricas.
+
+### Desvio: transcriber.py / tts.py removidos (B5)
+
+O ADR especificava retry em `transcriber.py` e `tts.py`. Ambos foram eliminados no B5 (ADR-028)
+com a migração para o modelo `gpt-audio` que processa áudio nativo. Retry em STT/TTS não se aplica.
+
+### Arquivo de resiliência extraído
+
+Todo código de retry e circuit breaker reside em `agent/agent/resilience.py` — **não** em
+`llm_core.py`. Exporta `CircuitBreaker`, `CircuitOpenError`, `llm_breaker` (singleton),
+`invoke_with_resilience`, `PT_BR_UNAVAILABLE`, `RETRYABLE_EXCEPTIONS`. Reutilizável pelo
+`CircuitBreakerMiddleware` planejado no B7 (ADR-026).
+
+### Lambda vs. async def no tenacity
+
+O decorator `@retry` do tenacity detecta `asyncio.iscoroutinefunction()` para decidir entre
+`Retrying` (sync) e `AsyncRetrying`. Um lambda que retorna coroutine é **sync** para o tenacity
+— ele nunca atrasa as tentativas, pois não vê a exception (a coroutine não foi awaited).
+**Solução:** sempre usar `async def` como função base antes de decorar com `@retry`.
+
+### Observabilidade do Circuit Breaker
+
+O `CircuitBreaker` emite logs Python estruturados em três eventos:
+
+| Evento | Nível | Mensagem |
+|---|---|---|
+| Circuito abre | WARNING | `circuit_breaker=open fails=3 reset_in=30s` |
+| Call bloqueada (circuito aberto) | WARNING | `circuit_breaker=blocked remaining=Xs` |
+| Circuito fecha (sucesso após OPEN) | INFO | `circuit_breaker=closed` |
+
+> **Nota sobre `circuit_breaker=closed`:** este log é emitido **apenas na recuperação** —
+> quando havia falhas acumuladas (`_fails > 0`, ver `agent/agent/resilience.py:53-57`) e
+> uma chamada bem-sucedida fecha o circuito. Em operação normal sem falhas anteriores
+> (caminho feliz, `_fails == 0`), esse log **não aparece** — e isso é correto por design.
+> Não use a ausência de `circuit_breaker=closed` como sinal de problema.
+
+Esses logs aparecem no `docker compose logs langgraph-server` e, via LangSmith callback,
+nas traces do agente quando `LANGSMITH_TRACING=true`.
+
+### Gap vs. modelo completo (Hannecke)
+
+A implementação atual cobre apenas **hard failures** (1 de 5 categorias). O modelo completo
+adiciona estados DEGRADED e HALF-OPEN, health score com decay, e detecção de falhas semânticas.
+Ver `docs/learning-lessons/circuit_breaker_custom_vs_libs.md` para upgrade path detalhado.
+
+### CircuitBreaker é singleton de processo — implicações de escala
+
+`llm_breaker` e `api_breaker` em `agent/agent/resilience.py:69-70` são instâncias **a nível de
+módulo**, criadas uma vez no import. O estado (`_fails`, `_opened_at` em
+`agent/agent/resilience.py:33-34`) vive **na memória de um único processo Python**. Todos os runs
+do grafo nesse processo compartilham o mesmo breaker.
+
+**Por que isso é o comportamento CORRETO hoje:** se a OpenAI está fora, está fora para todos. O
+breaker existe justamente para detectar uma falha de infraestrutura global e parar de martelar o
+serviço caído — compartilhar o estado entre requests é a *feature* (visibilidade cross-request),
+não um defeito. Quando o circuito abre (`agent/agent/resilience.py:61-62`), todos os pacientes
+recebem `PT_BR_UNAVAILABLE` por 30s; é o fail-fast global desejado.
+
+**Deploy atual = réplica única.** O serviço `langgraph-server` em `docker-compose.yml` é definido
+uma vez, sem `deploy.replicas` nem `--scale` — há **1 processo** do agente. Logo existe **1**
+`llm_breaker`, de fato global. Não há dívida técnica a corrigir neste estágio (clínica única,
+baixa concorrência).
+
+**Onde a escala quebra a premissa — duas dimensões distintas:**
+
+| Dimensão | O que acontece | Quando vira problema | Mitigação |
+|---|---|---|---|
+| **N réplicas** (escala horizontal) | Cada processo tem seu próprio breaker em memória → N×3 falhas antes de todos abrirem; uma réplica não avisa as outras. O "fail-fast global" deixa de ser global. | Render/orquestrador rodando >1 instância do `langgraph-server` | Mover o estado do breaker (`_fails`, `_opened_at`) para o **Redis** já presente no stack (`docker-compose.yml`, `REDIS_URI`) — breaker compartilhado entre processos |
+| **Multi-tenant** (Spec 006+) | Um único breaker global: o tenant A que dispara o circuito derruba o tenant B (blast radius grande demais) | Quando houver `tenant_id`/`user_id` autenticado (Spec 006) | Breaker chaveado por tenant — `dict[str, CircuitBreaker]` por `tenant_id`, em vez de singleton |
+
+**Distinção importante:** as duas mitigações são ortogonais e independentes:
+- *Redis-backed* resolve a fragmentação entre **processos** (escala horizontal), mantendo o breaker
+  global por tenant.
+- *Por-tenant* resolve o blast radius entre **clientes** (multi-tenancy), e pode coexistir com o
+  estado em memória (1 réplica) ou em Redis (N réplicas).
+
+Para uma falha de infraestrutura genuinamente global (OpenAI inteira fora, rate limit da conta), o
+singleton de processo continua correto em qualquer escala — o por-tenant só importa quando o limite
+de falha é por fatia de tráfego (ex.: rate limit por cliente).
+
+**Nota sobre `close()` e thread-safety:** `CircuitBreaker.close()` (`agent/agent/resilience.py:36-39`)
+existe para isolamento entre testes e **não é thread-safe**. Aceitável: testes rodam serialmente e a
+produção usa asyncio single-threaded. Um breaker Redis-backed (acima) precisaria de operações
+atômicas (ex.: `INCR`) para o incremento de falhas sob concorrência real.
+
+---
+
+## Notas de Implementação — API-side (2026-06-11)
+
+### `db/init.js` — startup retry
+
+`initializeWithRetry(pool, initSchema, seed)` usa `p-retry` (4 retries, exp 1→5s, factor 2).
+Abort imediato em erros de autenticação (`EAUTH` / "password"). Chamado em `server.js` antes
+de `app.listen`.
+
+### `db/withRetry.js` — query retry
+
+`withDbRetry(fn)` usa `p-retry` (2 retries, exp 200→2000ms). Retenta em
+`ECONNRESET`, `ECONNREFUSED`, `ETIMEDOUT`, `57P01`, `08006`, `08001` e mensagens
+"connection terminated/refused". `AbortError` em todos os outros erros — constraint violations
+(23xxx), auth, e erros de negócio não são retentados.
+
+Todos os métodos de `api/src/repositories/*.js` encapsulam `pool.query` em `withDbRetry`.
+
+### Nuance: retry dentro de transação é inócuo (não corrigido — decisão consciente)
+
+Os métodos de repositório recebem um `exec` que é **ou** o `pool` (autocommit) **ou** o `client`
+de uma transação (`api/src/services/agendamentosService.js:23-44` passa `client` como `exec` para
+`claimIfAvailable` e `create`). O `withDbRetry` envolve a query nos dois casos.
+
+- **Query no `pool` (autocommit):** cada query é isolada — retentar resolve um blip transiente de
+  conexão. É aqui que o retry agrega valor (ex.: `api/src/services/agendamentosService.js:50`,
+  pós-commit no pool).
+- **Query no `client` (transação):** se uma query falha dentro de um `BEGIN`, o Postgres aborta a
+  transação inteira; a re-tentativa no mesmo `client` recebe `"current transaction is aborted"` —
+  que **não** casa com `TRANSIENT_CODES` em `api/src/db/withRetry.js:7`, então `isTransient` retorna
+  `false` e dispara `AbortError` imediatamente. O retry **nunca ajuda** dentro de transação.
+
+**Por que NÃO foi corrigido:**
+1. **Sem dano:** o `catch` do serviço faz `ROLLBACK` (`api/src/services/agendamentosService.js:40`,
+   `:84`) — sem corrupção de dados, com ou sem o retry fútil.
+2. **Custo mínimo:** no pior caso ~200ms (um ciclo de backoff `minTimeout`) antes do `AbortError`,
+   e só no caminho de erro (raro) de uma query de transação que já falhou.
+3. **Fix não é trivial como parece:** `withDbRetry` (`api/src/db/withRetry.js`) hoje não conhece o
+   `pool`. Pular o retry quando `exec !== pool` exigiria mudar a assinatura de `withDbRetry` e tocar
+   **todos** os call sites em `api/src/repositories/*.js` — refatoração transversal por um ganho de
+   latência marginal num não-bug. Risco de regressão > benefício.
+
+**Se um dia a latência importar:** detectar `exec !== pool` em `withDbRetry` e pular o retry nesse
+caso (um `if`), passando `exec` + referência do pool para a função. Documentado como upgrade path,
+não aplicado agora.
+
+### Desvio: async-retry → p-retry
+
+O plano original especificava `async-retry` para startup. `p-retry` já estava no `package.json`
+(adicionado na sessão B6 anterior) e oferece a mesma API com `AbortError` integrado. Sem nova dep.
+
+### Contrato de resiliência — outcomes validados
+
+| # | Outcome | Teste | Status |
+|---|---------|-------|--------|
+| 1 | Transient LLM error retried transparently | `test_llm_transient_error_is_retried_transparently` | ✅ |
+| 2 | 3 LLM failures → breaker opens → pt-BR msg | `test_llm_breaker_opens_after_3_failures_returns_ptbr_message` | ✅ |
+| 3 | DB cold-start retry → request succeeds | `resilience.test.js: retries a transient ECONNRESET` | ✅ |
+| 4 | 409 not retried | `test_api_client_does_not_retry_409` + `resilience.test.js: 409` | ✅ |
+| 5 | Email retry → exactly one email | `test_email_sender_no_duplicate_on_smtp_retry` | ✅ |
+| 6 | 66 pytest + 41 Jest green | CI gate | ✅ |

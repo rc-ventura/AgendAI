@@ -1,20 +1,13 @@
-const { randomUUID } = require('crypto');
-const pino = require('pino');
-
-const logger = pino({
-  level: process.env.NODE_ENV === 'test' ? 'silent' : 'info',
-});
+const logger = require('../logger');
 
 function requestLogger(req, res, next) {
   const start = Date.now();
-  const correlationId = req.headers['x-request-id'] || randomUUID();
-
-  req.correlationId = correlationId;
-  res.setHeader('X-Request-ID', correlationId);
 
   res.on('finish', () => {
     logger.info({
-      correlation_id: correlationId,
+      request_id: req.requestId,
+      service: 'api',
+      event: 'http.request',
       method: req.method,
       path: req.path,
       status_code: res.statusCode,

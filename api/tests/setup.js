@@ -37,7 +37,7 @@ async function resetDb(pool) {
 }
 
 async function createTestApp() {
-  cache.clear();
+  await cache.clear();
   const pool = getTestPool();
   await resetDb(pool);
   return { app: createApp(pool), pool };

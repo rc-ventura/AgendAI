@@ -1,6 +1,9 @@
+'use strict';
+const { withDbRetry } = require('../db/withRetry');
+
 function createPainelRepository(pool) {
   async function findAllAgendamentos(exec = pool) {
-    const { rows } = await exec.query(`
+    const { rows } = await withDbRetry(() => exec.query(`
       SELECT a.id, a.status, a.criado_em,
              p.nome as paciente_nome, p.email as paciente_email,
              m.nome as medico_nome, m.especialidade,
@@ -10,7 +13,7 @@ function createPainelRepository(pool) {
       JOIN horarios h ON h.id = a.horario_id
       JOIN medicos m ON m.id = h.medico_id
       ORDER BY h.data_hora
-    `);
+    `));
     return rows;
   }
 

@@ -4,9 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
-shell commands, and other important information, read the current spec:
-`specs/005-agent-hardening/spec.md` (Agent Hardening: retry + circuit breaker,
-guardrails, context manager, memory management, HITL, create_agent middleware).
+shell commands, and other important information, read the current plan
+at specs/005-agent-hardening/plan.md
 <!-- SPECKIT END -->
 
 
@@ -52,10 +51,10 @@ docker compose down -v          # stop and wipe volumes (resets DB)
 ```bash
 # API — requires a local Postgres (docker compose postgres service or local install)
 export DATABASE_URL=postgres://agendai:agendai@localhost:5433/agendai_test
-cd api && npm install && npm test          # 39 Jest tests against real Postgres
+cd api && npm install && npm test          # 48 Jest tests against real Postgres
 
 # Agent
-cd agent && uv run pytest --tb=short      # 70 pytest tests
+cd agent && uv run pytest --tb=short      # 91 pytest tests
 ```
 
 ### Local dev (API only, without Docker)
@@ -84,23 +83,28 @@ routes/ → controllers/ → services/ → repositories/ → pg.Pool → Postgre
 
 - **`db/connection.js`** — `pg.Pool` singleton via `DATABASE_URL`; conditional SSL (off for localhost/CI, on for Neon); `async initSchema(pool)` runs `schema.sql` on startup (idempotent).
 - **`db/seed.js`** — async; seeds 3 doctors, 5 patients, 10 slots, 2 appointments once (count-guard).
-- **`cache/index.js`** — `node-cache` TTL 60 s. Availability queries cached; writes call `delByPrefix('horarios')` after commit.
-- **`app.js`** — `createApp(pool)` factory. Rate limiting (100 req/15 min), 30 s timeout, request logger.
+- **`cache/index.js`** — Redis (`ioredis`) TTL 60 s. Availability queries cached; writes call `delByPrefix('horarios')` after commit. Graceful no-op fallback when `REDIS_URI` absent.
+- **`middlewares/requestId.js`** — accepts inbound `X-Request-ID` or generates UUID; exposes on `req.requestId`.
+- **`app.js`** — `createApp(pool)` factory. Rate limiting (100 req/15 min), 30 s timeout, `requestId` → `requestLogger` (structured JSON + pino).
 - **`server.js`** — async startup: `initSchema` → `seed` → `listen`; `process.exit(1)` on failure.
 
 ### LangGraph Agent
 
-The agent graph is compiled in `agent/agent/graph.py` **without a checkpointer** — the LangGraph Server injects its own Postgres-backed checkpointer at runtime. Nodes in `agent/agent/nodes/`:
+The agent graph is compiled in `agent/agent/graph.py` **without a checkpointer** — the LangGraph Server injects its own Postgres-backed checkpointer at runtime. Uses `create_agent` (ADR-026) wrapping the chat+tools loop as a subgraph. Nodes in `agent/agent/nodes/`:
 
-- `input_detector.py` — routes text vs. audio
-- `transcriber.py` — Whisper STT
-- `llm_core.py` — GPT-4o-mini with tool bindings
-- `tools.py` — 6 `@tool` async functions calling the REST API via `api_client.py`
+- `input_detector.py` — routes text vs. audio; audio enters as `HumanMessage(input_audio)` content part
+- `llm_core.py` — `base_llm` (gpt-4o-mini, text) + `audio_llm` (gpt-audio, text+audio modalities)
+- `tools.py` — 6 `@tool` async functions calling the REST API via `api_client.py`; parallel tool calls enabled
 - `tool_result_processor.py` — detects create/cancel and prepares email payload
 - `email_sender.py` — Resend HTTP API with `tenacity` retry (3x, exponential backoff)
 - `tts.py` — OpenAI TTS (voice `alloy`)
 
-The server listens on **port 8123** (internal only). Config via `agent/langgraph.json` (graph: `agendai_agent`).
+**Middleware stack** (`agent/agent/middleware.py`, applied via `create_agent`):
+```
+injection_guard → pii_email/cpf/phone → summarization → llm_circuit_breaker → llm_retry → tool_retry → api_circuit_breaker
+```
+
+The server listens on **port 8123** (internal only). Config via `agent/langgraph.json` (graph: `agendai_agent`). `_MAX_GRAPH_STEPS=60` (9 middleware items × ~6 steps/LLM call).
 
 ### Database
 

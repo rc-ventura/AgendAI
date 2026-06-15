@@ -46,7 +46,7 @@ function createAgendamentosService(pool, { agendamentosRepo, pacientesRepo, hora
     // Post-commit work runs on the pool (autocommit), not the txn client, so it
     // must sit outside the try/catch — otherwise a throw here would trigger a
     // ROLLBACK on an already-committed transaction.
-    cache.delByPrefix('horarios');
+    await cache.delByPrefix('horarios');
     const row = await agendamentosRepo.findById(newId);
     return formatAgendamento(row);
   }
@@ -88,7 +88,7 @@ function createAgendamentosService(pool, { agendamentosRepo, pacientesRepo, hora
     }
 
     // Post-commit: see note in criarAgendamento.
-    cache.delByPrefix('horarios');
+    await cache.delByPrefix('horarios');
     const row = await agendamentosRepo.findById(id);
     return formatAgendamento(row);
   }

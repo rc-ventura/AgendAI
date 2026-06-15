@@ -1,566 +1,406 @@
-# Feature Specification: Spec 005 — Agent Hardening (Production-Grade Resilience)
+# Feature Specification: Agent Hardening (Production-Grade Resilience)
 
 **Feature Branch**: `005-agent-hardening`
 
-**Created**: 2026-06-03
-
-**Updated**: 2026-06-03
+**Created**: 2026-06-09
 
 **Status**: Draft
 
-**Input**: Análise de gaps agênticos mapeados no `docs/AgendAI_Architecture_Roadmap.pdf` (V2.0)
-e observações de produção na Fase 1 (Render). Baseado nos whitepapers *Prototype to Production*,
-*Context Engineering: Sessions & Memory* e *Agentic Design Patterns* (Google Cloud, 2025).
+**Input**: User description: "analyze the artifacts in specs/005-agent-hardening/spec.md then build the spec 005 utilizing the SDD framework. Additionally read the relevant docs/adr/ and docs/learning-lessons/"
+
+**Supporting artifacts**:
+[technical-design.md](./technical-design.md) ·
+[ADR-024 (retry/resilience)](../../docs/adr/ADR-024-retry-resilience-strategy.md) ·
+[ADR-025 (checkpoint strategy)](../../docs/adr/ADR-025-langgraph-checkpoint-strategy.md) ·
+[learning-lessons/arquitetura_redis_postgress.md](../../docs/learning-lessons/arquitetura_redis_postgress.md)
 
 ---
 
 ## Why This Feature Exists
 
-O AgendAI está em produção na Fase 1 (Render + GitHub Actions). A análise de gaps agênticos
-identificou que, apesar de funcionar, o sistema não é production-grade em sete dimensões:
-resiliência a falhas, persistência de sessão, identidade de usuário, segurança de conteúdo
-(input e output), observabilidade, gerenciamento de contexto e memória de longo prazo. Cada
-gap transforma um problema isolado em degradação visível ao usuário ou risco de segurança.
+AgendAI runs in production (Phase 1 on Render), but production observation revealed it is not
+yet production-grade: a transient backend hiccup can silently drop a patient's message, the
+streamed response stutters noticeably, untrusted input reaches the model unguarded, long
+conversations risk overflowing the model's context, and incidents are hard to trace end-to-end.
 
-Esta spec endereça os 7 gaps em ordem de impacto × esforço.
-
----
-
-## Gaps Mapeados (P1 → P7)
-
-### P1 — Retry + Circuit Breaker
-
-**Problema:** `llm_core.py`, `transcriber.py` e `api_client.py` não têm retry. Uma falha
-transiente da OpenAI (`RateLimitError`, `APITimeoutError`) ou da API interna (cold start no
-Render) encerra o run do grafo permanentemente. `tts.py` e `email_sender.py` já têm tenacity.
-
-**Decisão técnica:** Ver [ADR-024](../../docs/adr/ADR-024-retry-resilience-strategy.md).
-
-**Escopo:**
-- `agent/agent/nodes/llm_core.py` — retry tenacity + circuit breaker pybreaker
-- `agent/agent/nodes/transcriber.py` — retry tenacity
-- `agent/agent/api_client.py` — retry tenacity (só `ConnectError`/`TimeoutException`, não 4xx)
-- `api/src/db/connection.js` — async-retry no startup (5x, até 30s)
-- `api/src/repositories/*.js` — p-retry em queries transientes
+This feature hardens the agent along five dimensions that **do not require user
+authentication**: reliability, performance, content safety, context sustainability, and
+observability. Identity-dependent work (per-user sessions, long-term memory, human-in-the-loop)
+is deliberately deferred to **Spec 006** (auth + session) and **Spec 007** (memory + HITL).
 
 ---
 
-### P2 — Sessão persistente por usuário
+## User Scenarios & Testing *(mandatory)*
 
-**Problema:** `InMemoryCheckpointer` (ADR-014) reseta em restart. Conversas não sobrevivem a
-redeploys. Cada restart do `langgraph-server` apaga o histórico de todos os threads.
+### User Story 1 - A patient always gets an answer (Priority: P1)
 
-**Decisão:** Migrar para `PostgresSaver` (Fase 1-2) ou Vertex AI Agent Engine Sessions (Fase 3).
-Cada conversa ganha um `thread_id` por `user_id` e sobrevive a restarts.
+A patient sends a scheduling request through the chat. Even when the model provider or the
+internal scheduling API has a transient failure or is waking from a cold start, the patient
+still receives a correct answer. When a provider is genuinely unavailable, the patient gets a
+clear, fast message in Portuguese instead of a hang or a blank failure.
 
-**Nota:** Na Fase 1 com LangGraph Server, o checkpointer Postgres já é provido pelo servidor.
-O gap real é a falta de `user_id` para isolar threads por usuário — bloqueado pelo P3 (auth).
+**Why this priority**: A patient who sends a message and receives nothing is the single worst
+outcome — it erodes trust and loses the booking. Reliability is the foundation; nothing else
+matters if the system silently fails. This is the MVP slice.
 
-**Evolução por fase:**
-```
-Fase 1 (agora): InMemoryCheckpointer → reseta em restart
-Fase 2:         PostgresSaver(DATABASE_URL) → persiste, isolado por thread_id
-Fase 3:         Vertex AI Agent Engine Sessions → managed, HIPAA compliant
-```
+**Independent Test**: Inject transient failures (provider connection error, internal API cold
+start, slow database) during a scheduling flow and confirm the patient still receives the
+correct response with no visible error. Separately, force sustained provider failure and
+confirm the patient receives a clear pt-BR message within roughly one second rather than a
+long timeout.
 
----
+**Acceptance Scenarios**:
 
-### P3 — Autenticação de usuário
-
-**Problema:** Só existe token de serviço compartilhado (`LANGGRAPH_AUTH_TOKEN`). Sem identidade
-de usuário, sem JWT, sem sessão individual. Qualquer um com o token acessa dados de todos.
-
-**Decisão:** Clerk (free tier) ou Auth0 — o `user_id` autenticado passa a ser o `thread_id`
-do checkpointer LangGraph, conectando sessão, memória e auditoria. Desbloqueia P2 e P7.
-
-**Evolução por fase:**
-```
-Fase 1: token fixo compartilhado
-Fase 2: Clerk/Auth0 JWT → nginx valida → user_id no contexto do agente
-Fase 3: Amazon Cognito / Firebase Auth (free até 50k MAU)
-```
+1. **Given** the model provider returns a transient connection error on the first attempt,
+   **When** the patient asks for available times, **Then** the system retries and the patient
+   receives the correct list without seeing any error.
+2. **Given** the internal scheduling API is cold-starting, **When** the agent needs to call it,
+   **Then** the agent waits and retries within a bounded window and the request still succeeds.
+3. **Given** the model provider has failed repeatedly beyond the failure threshold, **When** a
+   patient sends a message, **Then** the patient receives a clear pt-BR unavailability message
+   quickly instead of waiting for a timeout.
+4. **Given** the internal API returns a business error (e.g., slot already taken), **When** the
+   agent receives it, **Then** the system does NOT retry and relays the correct business
+   outcome to the patient.
 
 ---
 
-### P4 — Guardrails de input e output
+### User Story 2 - Responses feel fast and fluid (Priority: P2)
 
-**Problema:** Sem validação de entrada nem filtragem de saída. O agente está exposto a:
-- **Input:** prompt injection, jailbreak, tópicos off-scope (não médicos), PII enviado pelo
-  usuário (CPF, número de cartão) que pode ser logado ou vazado
-- **Output:** resposta do LLM pode conter PII do paciente, informações médicas incorretas,
-  ou conteúdo fora do escopo da clínica
+A patient interacting with the chat experiences responses that begin quickly and stream
+smoothly, without the multi-second stalls ("engasgo") observed in production between
+conversation phases. A significant share of that stall comes from the system writing the full
+conversation state to durable storage after **every** internal processing step — most of which
+contributes nothing to recovery. Responses feel fluid when that persistence cost is taken off
+the patient's critical path.
 
-**Decisão:** Dois pontos de controle no grafo — antes e depois do LLM:
+**Why this priority**: Latency is the most-felt day-to-day complaint. The system "works"
+without this slice, so it ranks below reliability — but perceived speed strongly shapes whether
+patients complete a booking.
 
-```
-[input] → validate_input → chat_with_llm → validate_output → [resposta ao usuário]
-```
+Speed also depends on the AI models chosen and the voice path: the current transcription and
+speech-synthesis steps add several seconds to a voice interaction, and faster/cheaper models
+exist for both text and audio. Choosing models that minimize latency and cost — without losing
+reliable tool-calling or transcription quality — is part of making responses feel fast and
+keeping the per-conversation cost sustainable.
 
-**validate_input** (novo nó LangGraph):
-```python
-def validate_input(state: AgendAIState) -> dict:
-    text = state["input"]
-    if is_injection(text):      return {"blocked": True, "reason": "prompt_injection"}
-    if is_off_scope(text):      return {"blocked": True, "reason": "off_scope"}
-    if contains_pii(text):      return {"blocked": True, "reason": "pii_detected"}
-    return state
-```
+**Independent Test**: Measure end-to-end latency for a standard text scheduling request against
+the current production baseline, and confirm a meaningful reduction with no perceptible
+multi-second stalls between phases of the streamed answer. Separately, count the durable-storage
+write operations on the critical path and confirm they drop substantially while conversation
+recovery still works. For the voice path, measure the added transcription+synthesis latency and
+confirm it stays within an acceptable bound.
 
-**validate_output** (novo nó LangGraph):
-```python
-def validate_output(state: AgendAIState) -> dict:
-    response = state["messages"][-1].content
-    if contains_pii(response):      redact_pii(response)
-    if is_off_scope(response):      return {"response": FALLBACK_MESSAGE}
-    return state
-```
+**Acceptance Scenarios**:
 
-**Evolução por fase:**
-```
-Fase 1/2: nós manuais (regex + lista de padrões)
-Fase 3:   AWS Bedrock Guardrails via ApplyGuardrail API
-          → funciona com GPT-4o-mini sem trocar de LLM
-          → configuração no console AWS: checkboxes, sem código
-```
-
-**Tipos de verificação:**
-
-| Verificação | Input | Output | Fase 1/2 | Fase 3 |
-|-------------|-------|--------|----------|--------|
-| Prompt injection | ✅ | — | regex patterns | Bedrock |
-| Off-scope (não médico) | ✅ | ✅ | lista de tópicos | Bedrock |
-| PII detection | ✅ | ✅ | regex CPF/email/tel | Bedrock |
-| Conteúdo tóxico | — | ✅ | lista de palavras | Bedrock |
-| Informação médica incorreta | — | ✅ | — | Bedrock |
+1. **Given** the model requests several independent lookups, **When** it fulfills a request,
+   **Then** those lookups happen concurrently rather than one after another.
+2. **Given** a standard text scheduling request, **When** the patient submits it, **Then** the
+   median end-to-end latency is meaningfully lower than the measured baseline.
+3. **Given** the same lookup is needed twice within one conversation, **When** it recurs,
+   **Then** the system reuses the earlier result instead of recomputing it.
+4. **Given** a multi-step conversation turn, **When** the agent processes it, **Then** the
+   system persists durable state only at the points needed for recovery (e.g., turn boundaries)
+   rather than after every internal step.
+5. **Given** an active conversation, **When** the patient continues it, **Then** ephemeral
+   session state is served from fast storage while only selected long-lived data is written
+   durably — the patient does not wait on full-state writes between phases.
+6. **Given** a voice message, **When** it is transcribed, processed, and answered, **Then** the
+   latency added by the audio steps stays within an acceptable bound and does not dominate the
+   interaction.
 
 ---
 
-### P5 — Logs estruturados + correlation IDs
+### User Story 3 - Interactions stay safe and private (Priority: P2)
 
-**Problema:** Sem `request_id` propagado entre nginx → API → agente → LangSmith. Impossível
-correlacionar um erro do usuário com o trace correto no LangSmith.
+Patient input that is malicious (prompt injection/jailbreak), off-scope (not about medical
+scheduling), or that contains sensitive personal data is handled safely. The agent never leaks
+another patient's data and never persists user-supplied sensitive data into logs.
 
-**Decisão:** Middleware Express gerando `request_id` (UUID) por request, propagado nos headers
-(`X-Request-ID`) e nos logs de cada serviço. No agente Python: `structlog` com output JSON.
-Liga `request_id` ao `trace_id` do LangSmith via metadata.
+**Why this priority**: AgendAI handles patient PII; the constitution requires input guardrails
+to land before the system processes unmoderated public input at scale. It is a safety and
+privacy gate, ranked alongside performance.
 
-```
-nginx (X-Request-ID gerado) → API (loga com request_id) → agente (structlog JSON)
-                                                                   ↓
-                                                            LangSmith trace_id
-```
+**Independent Test**: Run a corpus of injection, off-scope, and PII-bearing inputs and confirm
+each is blocked, refused with a clear pt-BR fallback, or redacted as appropriate; inspect logs
+to confirm no sensitive data was written.
 
----
+**Acceptance Scenarios**:
 
-### P6 — Context Manager
-
-**Problema:** O agente acumula todas as mensagens da conversa na janela de contexto sem nenhum
-gerenciamento. Em conversas longas, o contexto cresce indefinidamente, aumentando latência e
-custo por token, e podendo exceder o limite de contexto do GPT-4o-mini (128k tokens).
-
-**O que é context management:**
-Decidir **o que entra na janela de contexto** enviada ao LLM a cada turno — não apenas
-concatenar todas as mensagens anteriores.
-
-**Estratégias:**
-
-| Estratégia | Quando usar | Como |
-|-----------|-------------|------|
-| **Sliding window** | Conversas longas | Mantém últimas N mensagens |
-| **Summarization** | Histórico volumoso | Resume mensagens antigas em um bloco |
-| **Selective retrieval** | Memória longa (P7) | Busca mensagens relevantes via embedding |
-| **Token budget** | Controle de custo | Trunca contexto ao atingir X tokens |
-
-**Decisão para Fase 1/2:** Sliding window com summarization — mantém as últimas 10 trocas
-completas e comprime o restante em um resumo injetado no system prompt.
-
-```python
-# agent/agent/context_manager.py
-MAX_TURNS = 10
-SUMMARY_PROMPT = "Resuma em 3 frases o histórico da conversa anterior:"
-
-def trim_context(messages: list, llm) -> list:
-    if len(messages) <= MAX_TURNS * 2:
-        return messages
-    old = messages[:-MAX_TURNS * 2]
-    recent = messages[-MAX_TURNS * 2:]
-    summary = llm.invoke([SystemMessage(SUMMARY_PROMPT)] + old)
-    return [SystemMessage(f"[Resumo anterior]: {summary.content}")] + recent
-```
-
-**Evolução por fase:**
-```
-Fase 1/2: sliding window + summarization manual
-Fase 3:   Vertex AI Memory Bank → extração semântica automática via Gemini
-          → contexto enriquecido com fatos relevantes do paciente
-```
+1. **Given** an input containing a known prompt-injection pattern, **When** it is received,
+   **Then** it is blocked before reaching the model.
+2. **Given** an off-scope request (e.g., "help me write code"), **When** it is received,
+   **Then** the agent declines with a clear pt-BR message scoped to the clinic.
+3. **Given** an input containing sensitive personal data, **When** it is processed, **Then**
+   that data does not appear in any application log.
+4. **Given** a generated response, **When** it is returned, **Then** it contains no other
+   patient's data and no off-scope or unsafe content.
 
 ---
 
-### P7 — Memory Management (user, episodic, procedural)
+### User Story 4 - Long conversations stay coherent and sustainable (Priority: P3)
 
-**Problema:** O agente não tem memória além da conversa atual. Não sabe que o paciente João
-prefere consultas às sextas, que já cancelou 2 vezes, ou que tem convênio Unimed. Cada sessão
-começa do zero — a experiência não melhora com o uso.
+A patient in a long back-and-forth keeps getting coherent answers. The conversation never
+breaks because of context overflow, and latency and cost do not balloon as history grows.
 
-**Três tipos de memória agêntica** (baseado em *Context Engineering: Sessions & Memory*,
-Google Cloud, 2025):
+**Why this priority**: Most conversations are short, so this is lower priority — but unbounded
+context will eventually break long sessions and inflate cost, so it must be addressed before
+scale.
 
-#### Memória Episódica (curto prazo — o que aconteceu nesta conversa)
+**Independent Test**: Drive a conversation past 20 turns and confirm no context-limit failure,
+that key facts (bookings made, cancellations, stated preferences) are still honored, and that
+latency remains stable.
 
-- **O que é:** Histórico da conversa atual — mensagens, tool calls, resultados
-- **Status atual:** Existe via LangGraph checkpointer, mas sem `user_id` (gap do P2/P3)
-- **Upgrade:** Após P2+P3, cada paciente tem seu thread isolado que persiste entre sessões
-- **Fase 3:** Vertex AI Agent Engine Sessions — managed, isolado por user, HIPAA compliant
+**Acceptance Scenarios**:
 
-```python
-# Com PostgresSaver (Fase 2):
-checkpointer = PostgresSaver.from_conn_string(DATABASE_URL)
-graph = workflow.compile(checkpointer=checkpointer)
-# thread_id = user_id → cada paciente tem seu histórico
-```
-
-#### Memória de Usuário (longo prazo — fatos sobre o paciente)
-
-- **O que é:** Fatos semânticos extraídos das conversas e armazenados persistentemente.
-  Exemplo: "prefere manhã", "tem fobia de dentista", "usa convênio Amil"
-- **Status atual:** Não existe
-- **Fase 2:** Tabela `patient_memory` no Postgres + extração manual via prompt
-- **Fase 3:** Vertex AI Memory Bank (GA) — extração semântica automática via Gemini,
-  busca por relevância, sem pipeline ETL manual
-
-```python
-# Fase 2 — extração manual:
-def extract_user_facts(messages: list, llm) -> list[str]:
-    return llm.invoke(EXTRACT_FACTS_PROMPT + messages)
-
-# Fase 3 — Vertex AI Memory Bank:
-memory = MemoryBankServiceClient()
-user_context = memory.retrieve_memories(
-    agent_engine_id=RUNTIME_ID,
-    user_id=state.user_id,
-    query=state.input
-)
-system_prompt = f"{BASE_PROMPT}\n\nContexto do paciente:\n{user_context}"
-```
-
-#### Memória Procedural (como o agente deve se comportar)
-
-- **O que é:** Regras, personalidade, fluxos e ferramentas do agente — encoded no system
-  prompt e na definição do grafo LangGraph
-- **Status atual:** Existe implicitamente no system prompt de `llm_core.py` e nos nós do grafo
-- **Gap:** Não é versionada nem testada explicitamente como "memória"
-- **Upgrade:** Externalizar o system prompt para arquivo versionado + testes de comportamento
-  que verificam que o agente segue as regras procedurais
-
-```python
-# agent/agent/prompts/system_prompt.py (versionado)
-SYSTEM_PROMPT = """
-Você é o assistente de agendamento da Clínica AgendAI.
-Regras:
-1. Só agende consultas para pacientes cadastrados no sistema
-2. Confirme sempre data, hora e médico antes de criar o agendamento
-3. Nunca revele dados de outros pacientes
-"""
-```
-
-**Evolução da memória por fase:**
-
-```
-           | Episódica        | Usuário              | Procedural
------------|------------------|----------------------|------------------
-Fase 1     | InMemory (reset) | Não existe           | System prompt fixo
-Fase 2     | PostgresSaver    | Tabela patient_memory| Arquivo versionado
-Fase 3     | Agent Engine     | Vertex Memory Bank   | + testes de comportamento
-           | Sessions (GCP)   | (extração automática)|
-```
+1. **Given** a conversation exceeding the configured turn threshold, **When** the patient sends
+   another message, **Then** older history is compacted (not abruptly truncated) and the
+   response remains coherent.
+2. **Given** a long conversation, **When** the working context is assembled, **Then** it stays
+   within the model's limit.
+3. **Given** earlier critical facts (a booking was made, a preference stated), **When** history
+   is compacted, **Then** those facts are preserved.
 
 ---
 
-### P8 — Modernização do Core Agêntico: `create_agent` + Middleware (LangChain v1 + LangGraph v1)
+### User Story 5 - Incidents are traceable end-to-end (Priority: P3)
 
-> **Correção em relação ao rascunho anterior:** `create_react_agent` foi **depreciado** no
-> LangGraph v1.0 em favor de `create_agent` da `langchain.agents`. Os primitivos do grafo
-> (`StateGraph`, nós, arestas) são **inalterados** — não há breaking change no grafo em si.
-> O que muda é a camada de orquestração acima do grafo: o sistema de **middleware**.
->
-> Atenção: o `create_agent` foi removido em `langchain v1.1.0` sem aviso prévio — monitorar
-> o changelog antes de implementar. Os primitivos do LangGraph permanecem estáveis.
+When a patient reports a problem, an operator can reconstruct the exact request as it traveled
+through the gateway, the API, and the agent, and link it to the corresponding trace — quickly
+and unambiguously.
 
-**Problema:** O grafo atual (`graph.py`) implementa manualmente lógica que o novo sistema de
-middleware do LangChain v1 provê como prebuilt: retry de LLM, summarização de contexto,
-detecção de PII, e human-in-the-loop. Além disso, `MessagesState` como base do estado elimina
-boilerplate no `AgendAIState`.
+**Why this priority**: This delivers operational value rather than direct patient value, so it
+ranks lower — but it is what turns production incidents into diagnosable events.
 
-**Documentação oficial:**
-- [LangGraph v1.0 release](https://docs.langchain.com/oss/python/releases/langgraph-v1)
-- [LangChain v1.0 release](https://docs.langchain.com/oss/python/releases/langchain-v1)
-- [Middleware overview](https://docs.langchain.com/oss/python/langchain/middleware/overview)
+**Independent Test**: Trigger a known error in a request and confirm a single correlation id
+links every log line across components and the agent trace, and that an operator can find the
+full path within minutes.
 
----
+**Acceptance Scenarios**:
 
-#### 1. `MessagesState` como base do estado (LangGraph v1 — estável)
-
-Os primitivos do LangGraph v1 são inalterados. A única mudança de estado recomendada é
-usar `MessagesState` como classe base em vez de `TypedDict` manual:
-
-```python
-# Antes — TypedDict com add_messages manual:
-from typing import Annotated
-from langchain_core.messages import AnyMessage
-from langgraph.graph.message import add_messages
-
-class AgendAIState(TypedDict):
-    messages: Annotated[list[AnyMessage], add_messages]
-    input_type: Literal["text", "audio"]
-    ...
-
-# Depois — MessagesState já inclui messages com add_messages:
-from langgraph.graph import MessagesState
-
-class AgendAIState(MessagesState):
-    input_type: Literal["text", "audio"]
-    audio_data: bytes | None
-    session_id: str
-    email_pending: bool
-    email_payload: dict | None
-    final_response: str | bytes | None
-```
-
-O grafo (`StateGraph`, nós, arestas, roteamento condicional) permanece **idêntico**.
+1. **Given** an incoming request, **When** it enters the system, **Then** it is assigned a
+   unique correlation id propagated to every component.
+2. **Given** an error occurred on a specific request, **When** an operator searches by its
+   correlation id, **Then** they retrieve the complete request path and the agent trace.
 
 ---
 
-#### 2. `create_agent` + Middleware (LangChain v1 — substitui `create_react_agent`)
+### Edge Cases
 
-`create_react_agent` (de `langgraph.prebuilt`) foi depreciado. O substituto é `create_agent`
-de `langchain.agents`, que executa sobre o LangGraph e expõe um sistema de middleware com
-hooks em cada etapa do loop agêntico:
-
-```
-before_agent → before_model → wrap_model_call → [LLM] → after_model
-                                                              ↓
-                                               wrap_tool_call → [Tools] → after_agent
-```
-
-**Hooks disponíveis:**
-
-| Hook | Quando executa | Casos de uso |
-|------|---------------|-------------|
-| `before_agent` | Uma vez, no início | Carregar memória, validar input |
-| `before_model` | Antes de cada chamada ao LLM | Trim de histórico, PII input |
-| `wrap_model_call` | Envolve a chamada ao LLM | Retry, cache, troca de modelo |
-| `after_model` | Após LLM, antes de tools | Human-in-the-loop, PII output |
-| `wrap_tool_call` | Envolve cada tool call | Injetar contexto, interceptar resultado |
-| `after_agent` | Uma vez, ao final | Salvar memória, notificações, cleanup |
-
-**Prebuilt middleware relevantes para o AgendAI:**
-
-```python
-from langchain.agents import create_agent
-from langchain.agents.middleware import (
-    PIIMiddleware,             # P4: detecção e redação de PII input + output
-    SummarizationMiddleware,   # P6: resume histórico quando excede token threshold
-    HumanInTheLoopMiddleware,  # P9: pausa antes de tools irreversíveis
-    ModelRetryMiddleware,      # P1 (complementa tenacity no llm_core)
-)
-
-agent = create_agent(
-    model=llm,
-    tools=ALL_TOOLS,
-    middleware=[
-        PIIMiddleware(),
-        SummarizationMiddleware(token_threshold=8000),
-        HumanInTheLoopMiddleware(interrupt_on={"criar_agendamento": True,
-                                               "cancelar_agendamento": True}),
-        ModelRetryMiddleware(retries=3),
-    ],
-)
-```
-
-**Impacto no grafo:** `create_agent` retorna um grafo LangGraph compilado. Pode ser usado
-como nó/subgrafo dentro do grafo externo que mantém o pipeline de áudio:
-
-```
-START → detect_input_type
-          ├─ (texto) → [agent: create_agent + middleware] → send_email? → END
-          └─ (audio) → transcribe_audio → [agent] → synthesize_tts → END
-```
+- **Sustained outage vs transient blip**: the system must retry transient failures but fail
+  fast (clear message) once a dependency is repeatedly down — it must not retry forever.
+- **Business error masquerading as failure**: a "slot unavailable" (409) or "patient not found"
+  (404) must never be retried as if it were transient.
+- **Retry on an already-applied side effect**: retries must not duplicate an irreversible action
+  (e.g., a confirmation email already sent).
+- **Compaction losing a just-made booking**: history summarization must not drop a fact the
+  patient will rely on later in the same conversation.
+- **Guardrail false positive**: a legitimate medical-scheduling request must not be wrongly
+  blocked as off-scope.
+- **Audio flow**: reliability, guardrails, and latency improvements must hold for the
+  voice/transcription path as well as text.
 
 ---
 
-#### 3. O que NÃO muda
+## Requirements *(mandatory)*
 
-- `StateGraph`, nós, arestas, roteamento condicional — **inalterados** (LangGraph v1 estável)
-- Nós de áudio (`transcribe_audio`, `synthesize_tts`) — fora do `create_agent`
-- `email_sender.py` — side effect pós-tool, permanece como nó externo
-- `detect_input_type` — roteamento de entrada, externo ao core
-- Tools (`@tool` functions) — API inalterada
+### Functional Requirements
 
----
+**Reliability (US1)**
 
-#### 4. Relação entre Middleware e outros Ps
+- **FR-001**: System MUST automatically retry transient external failures (model provider,
+  internal scheduling API, database) with backoff before surfacing an error to the patient.
+- **FR-002**: System MUST distinguish transient infrastructure failures from business errors
+  and MUST NOT retry business errors (e.g., slot unavailable, patient not found, validation
+  failures).
+- **FR-003**: System MUST fail fast with a clear pt-BR message when a critical dependency is
+  unavailable beyond a defined failure threshold, instead of hanging until timeout.
+- **FR-004**: System startup MUST tolerate a slow-to-start datastore for a bounded warm-up
+  period before failing with a diagnostic.
+- **FR-005**: A transient failure that is successfully retried MUST NOT be visible to the
+  patient.
+- **FR-006**: System MUST NOT repeat an irreversible side effect (e.g., a confirmation email)
+  when retrying a step.
 
-O sistema de middleware torna P4 e P6 redundantes como nós manuais no grafo:
+**Performance (US2)**
 
-| Gap | Solução manual (sem middleware) | Com middleware LangChain v1 |
-|-----|---------------------------------|----------------------------|
-| P4 (guardrails PII) | Nó `validate_input` + `validate_output` | `PIIMiddleware` |
-| P6 (context manager) | Função `trim_context()` manual | `SummarizationMiddleware` |
-| P9 (HITL) | `interrupt()` manual no nó | `HumanInTheLoopMiddleware` |
-| P1 (retry LLM) | tenacity em `llm_core.py` | `ModelRetryMiddleware` (complementar) |
+- **FR-007**: When the model requests multiple independent lookups, System MUST execute them
+  concurrently rather than sequentially.
+- **FR-008**: System MUST minimize the number of model round-trips needed to fulfill a standard
+  scheduling request.
+- **FR-009**: System MUST NOT persist the full conversation/execution state after every internal
+  processing step. Durable state MUST be written only at the points required for recovery (e.g.,
+  at turn or conversation boundaries), not after each node.
+- **FR-010**: System MUST keep ephemeral active-session state in low-latency storage and MUST
+  persist durably only the selected long-lived data needed for recovery — full-state writes MUST
+  NOT block the patient's response between conversation phases.
+- **FR-011**: System SHOULD reuse the result of an identical, repeated lookup within the same
+  conversation instead of recomputing it. Cached reads MUST NOT serve stale data: results that can
+  change due to a write (availability, appointments) MUST be excluded from caching or invalidated
+  after the relevant write — consistent with the cache-after-commit rule.
+- **FR-012**: System SHOULD select the AI models (for text and for the voice path) that minimize
+  response latency and per-request cost while preserving reliable tool-calling and acceptable
+  transcription/synthesis quality.
+- **FR-013**: The voice path MUST keep the latency added by transcription and speech synthesis
+  within an acceptable bound so it does not dominate the interaction.
 
-**Recomendação:** implementar P8 antes de P4 e P6 — o middleware elimina código manual que
-seria escrito para esses gaps.
+**Safety & Privacy (US3)**
 
----
+- **FR-014**: System MUST validate patient input before acting on it and MUST block recognized
+  prompt-injection/jailbreak attempts before they reach the model.
+- **FR-015**: System MUST refuse off-scope (non medical-scheduling) requests with a clear pt-BR
+  fallback message.
+- **FR-016**: System MUST prevent user-supplied sensitive personal data from being persisted in
+  application logs.
+- **FR-017**: System MUST ensure generated responses never disclose another patient's data or
+  off-scope/unsafe content.
 
-### P9 — Human-in-the-Loop (HITL)
+**Context Sustainability (US4)**
 
-**Problema:** O agente executa ações irreversíveis (criar agendamento, cancelar consulta)
-diretamente, sem pedir confirmação ao usuário. Um mal-entendido do LLM pode criar ou cancelar
-uma consulta que o paciente não queria.
+- **FR-018**: System MUST keep the working context within the model's limit regardless of
+  conversation length.
+- **FR-019**: System MUST compact (summarize) older history rather than truncate it abruptly,
+  preserving critical facts (bookings made, cancellations, stated preferences).
 
-**O que é HITL:** O grafo pausa a execução antes de uma tool call crítica, apresenta os
-detalhes ao usuário e só prossegue com aprovação explícita.
+**Observability (US5)**
 
-**Duas abordagens:**
+- **FR-020**: System MUST assign a unique correlation id to each request and propagate it across
+  the gateway, API, and agent.
+- **FR-021**: System MUST emit structured logs that let an operator reconstruct a single
+  request's end-to-end path.
+- **FR-022**: Agent interactions (including tool calls) MUST be traceable and linkable to the
+  request's correlation id.
 
-**A) `HumanInTheLoopMiddleware` (via `create_agent` — LangChain v1):**
-```python
-HumanInTheLoopMiddleware(
-    interrupt_on={
-        "criar_agendamento": True,   # pausa antes de criar
-        "cancelar_agendamento": True  # pausa antes de cancelar
-    }
-)
-```
-O middleware intercepta em `after_model` (após o LLM decidir usar a tool, antes de executar).
+**Cross-cutting (constitution)**
 
-**B) `interrupt()` nativo do LangGraph (sem `create_agent`):**
-```python
-from langgraph.types import interrupt
+- **FR-023**: All existing automated tests (API + agent) MUST remain green, and new behavior
+  MUST ship with tests that fail before and pass after implementation.
+- **FR-024**: User-facing errors MUST be clear pt-BR messages and MUST NEVER expose raw stack
+  traces, secrets, or internal detail.
 
-async def confirm_action(state: AgendAIState) -> dict:
-    if state.get("email_payload"):
-        decision = interrupt({
-            "message": "Confirmar agendamento?",
-            "medico": state["email_payload"]["medico_nome"],
-            "data_hora": state["email_payload"]["data_hora"],
-        })
-        if not decision["confirmed"]:
-            return {"email_pending": False, "email_payload": None}
-    return state
-```
+### Key Entities *(include if feature involves data)*
 
-**Fluxo com HITL:**
-```
-chat_with_llm → [LLM decide criar agendamento]
-      ↓
- HITL check ──── pausa SSE ────► UI mostra confirmação ao paciente
-      │                               │
-      │                        paciente confirma
-      │                               │
-      └──────── resume ───────────────┘
-      ↓
-execute_tools → criar_agendamento → process_tool_results → send_email
-```
-
-**Requisito:** HITL com `interrupt()` requer checkpointer persistente (PostgresSaver) para
-salvar o estado enquanto aguarda resposta — bloqueado por P2.
-Com `HumanInTheLoopMiddleware` via `create_agent`, o gerenciamento de estado é interno.
-
-**Impacto:**
-- Elimina agendamentos/cancelamentos acidentais por erro de interpretação do LLM
-- Melhora confiança do usuário no sistema
-- Requisito de segurança para uso em ambiente médico real
-
----
-
-## Prioridade de Implementação
-
-| P | Gap | Esforço | Impacto | Fase | Status |
-|---|-----|---------|---------|------|--------|
-| P1 | Retry + Circuit Breaker | ~2h | Elimina erros silenciosos em produção | 1/2 | ADR-024 |
-| P2 | Sessão persistente | ~2h | Conversas sobrevivem a restarts | 1/2 | Bloqueado por P3 |
-| P3 | Auth de usuário | ~1 dia | Identidade + segurança | 2 | Desbloqueia P2/P7/P9 |
-| P4 | Guardrails input+output | ~4h | Segurança de conteúdo | 2/3 | Simplificado por P8 |
-| P5 | Logs estruturados | ~3h | Observabilidade end-to-end | 2 | — |
-| P6 | Context Manager | ~3h | Custo + latência em conv. longas | 2 | Simplificado por P8 |
-| P7 | Memory Management | ~1 semana | Experiência personalizada | 2/3 | Bloqueado por P2/P3 |
-| P8 | `create_agent` + Middleware | ~1 dia | Menos boilerplate, simplifica P4/P6/P9 | 2 | Aguardar estabilidade LC v1.1 |
-| P9 | Human-in-the-Loop (HITL) | ~4h | Elimina ações irreversíveis acidentais | 2 | Bloqueado por P2 (interrupt) |
+- **Conversation Session**: the ongoing exchange with one patient — its turns/messages and the
+  working context sent to the model. Its state has two tiers: **ephemeral session state** (the
+  in-flight working data, kept in low-latency storage) and **durable recovery state** (the
+  selected long-lived data persisted only at recovery points, not after every step).
+- **Request Trace**: a single inbound request's journey, identified by a correlation id that
+  links gateway, API, agent, and observability records.
+- **Guardrail Decision**: the outcome of validating an input or output — allow, block, refuse,
+  or redact — together with the reason.
+- **Resilience State**: per-dependency health used to decide retry vs. fail-fast (recent
+  failure count and whether the circuit is open or closed).
 
 ---
 
-## Acceptance Criteria por gap
+## Success Criteria *(mandatory)*
 
-### P1 (Retry + Circuit Breaker)
-1. `RateLimitError` em `llm_core.py` → retry automático, usuário não vê erro na 1ª falha
-2. 3 falhas consecutivas ao OpenAI → circuit breaker abre, erro claro em <1s
-3. Cold start do Render na API → agente aguarda e retenta, não falha imediatamente
-4. Startup da API não falha se Postgres demorar até 30s
-5. 70 pytest + 39 Jest continuam passando
+### Measurable Outcomes
 
-### P4 (Guardrails input+output)
-1. Input com padrão de prompt injection → bloqueado antes de chamar o LLM
-2. Input off-scope (ex: "me ajude a escrever código") → recusado com mensagem clara
-3. Output com PII do paciente → redactado antes de chegar ao usuário
-4. Output off-scope → substituído por mensagem de fallback da clínica
-
-### P6 (Context Manager)
-1. Conversa com mais de 10 turnos → mensagens antigas resumidas, não truncadas abruptamente
-2. Token count do contexto enviado ao LLM ≤ limite configurado
-3. Resumo preserva fatos críticos (agendamentos feitos, cancelamentos, preferências)
-
-### P7 (Memory Management — Fase 2)
-1. Após agendamento, fato "paciente agendou com Dr. X" é salvo na memória do usuário
-2. Na próxima sessão, o agente sabe que o paciente já consultou antes
-3. Memória episódica (thread) sobrevive a restart do servidor (bloqueado por P2+P3)
-
----
-
-## Dependências entre gaps
-
-```
-P3 (auth) ──────────────────────► P2 (sessão por user_id)
-                                        │
-                                        ▼
-                                   P7 (memória — precisa de user_id para isolar)
-
-P1 (retry) ─── independente ──── pode implementar agora
-
-P4 (guardrails) ─── independente ─── pode implementar agora (Bedrock na Fase 3)
-
-P5 (logs) ─── independente ──── pode implementar agora
-
-P6 (context) ─── parcialmente independente ─── não precisa de P3, mas se beneficia de P7
-
-P8 (create_agent + middleware) ─── recomendado antes de P4/P6/P9
-   ├─ PIIMiddleware           → substitui nós manuais de P4
-   ├─ SummarizationMiddleware → substitui código manual de P6
-   └─ HumanInTheLoopMiddleware → alternativa ao interrupt() de P9
-
-P9 (HITL interrupt) ─── bloqueado por P2 (checkpointer persistente necessário)
-                    └─ ou via HumanInTheLoopMiddleware (P8) sem depender de P2
-```
+- **SC-001**: Under transient-failure injection, at least 99% of patient messages receive a
+  correct answer or a clear failure message, and 0 messages are silently dropped.
+- **SC-002**: In transient-failure test scenarios, the patient sees no error 100% of the time
+  (the retry fully masks the blip).
+- **SC-003**: When a dependency is genuinely down, the patient receives a clear pt-BR message
+  within ~1 second rather than waiting for a timeout.
+- **SC-004**: Median end-to-end latency for a standard text scheduling request is reduced by at
+  least 50% versus the measured production baseline.
+- **SC-005**: No multi-second stalls are perceptible between phases of the streamed response in
+  the standard scheduling flow.
+- **SC-006**: The number of durable-storage write operations on the critical path of a standard
+  multi-step turn is reduced by at least 80% versus the current per-step baseline, with
+  conversation recovery still functioning.
+- **SC-007**: For a voice interaction, the latency added by transcription and speech synthesis
+  is reduced by at least 50% versus the current baseline.
+- **SC-008**: The average AI-model cost per conversation does not grow as conversation length
+  increases, and does not exceed the current per-conversation baseline.
+- **SC-009**: 100% of prompt-injection and off-scope inputs in the test corpus are blocked or
+  safely refused before reaching the model.
+- **SC-010**: 0 occurrences of user-supplied sensitive personal data appear in application logs
+  across the test corpus.
+- **SC-011**: Conversations of 20+ turns complete with 0 context-limit failures and retain 100%
+  of critical facts (bookings, cancellations, preferences) in the test scenarios.
+- **SC-012**: Any reported patient issue can be traced to its complete request path via a single
+  correlation id in under 5 minutes.
+- **SC-013**: The full automated test suite (API + agent) passes on every change.
 
 ---
 
-## Out of Scope desta spec (Fases 2/3 ou Specs separadas)
+## Assumptions
 
-- Terraform / Cloud IaC → Spec 006
-- Vertex AI Memory Bank (extração automática) → Spec 007
-- AWS Bedrock Guardrails (managed) → Spec 007
-- Vertex AI Agent Engine Sessions → Spec 007
-- Amazon Cognito / Firebase Auth → pode ser P3 desta spec ou Spec 007
-- Vertex AI Evaluation (quality gate no CI/CD) → Spec 007
+- **Baseline measurement**: the current end-to-end latency baseline (overall and per phase) will
+  be measured at planning time; the 50% reduction target (SC-004) is relative to that
+  measurement.
+- **No authentication in scope**: this spec uses the existing shared service token; per-user
+  identity and isolation are delivered in [Spec 006](../006-auth-session/spec.md).
+- **No long-term memory or HITL in scope**: those are delivered in
+  [Spec 007](../007-memory-hitl/spec.md).
+- **Guardrails are in-system for this phase**: lightweight checks (pattern/list based) run
+  inside the agent; managed cloud guardrails are a later-phase upgrade.
+- **State-persistence strategy** (FR-009/FR-010): the agent runtime today writes the full graph
+  state to durable Postgres after every node — for a ~6-node turn that is ~62 writes / ~8s of
+  overhead, and ADR-025 / the Redis-Postgres learning lesson show ~75% of those writes carry no
+  recovery value. The strategy is: (a) write durably only at recovery points instead of after
+  each node (checkpoint "exit"/selective mode), and (b) layer persistence — keep ephemeral
+  session state in fast storage (Redis, already deployed for streaming) and persist only
+  selected long-lived data durably (Postgres). See
+  [ADR-025](../../docs/adr/ADR-025-langgraph-checkpoint-strategy.md) and
+  [the learning lesson](../../docs/learning-lessons/arquitetura_redis_postgress.md).
+- **Managed runtime retained**: the managed LangGraph Server remains the runtime. The first move
+  is to tune checkpoint frequency within it (exit/selective mode); reusing the existing Redis as
+  a node-output cache is investigated next. Migrating off the managed server for full control of
+  state persistence is conditional and out of immediate scope — only revisited if checkpoint
+  frequency cannot be tuned within the managed server AND it remains the dominant latency cost
+  after the other performance work.
+- **Model evaluation is exploratory** (FR-012/FR-013, SC-007/SC-008): faster/cheaper text and
+  audio models are evaluated via benchmark before any swap. Reliable tool-calling is a hard
+  gate — a cheaper model that mis-calls tools is rejected. The voice path is the clearest win
+  (a faster transcription provider can cut several seconds with no architecture change); a fully
+  real-time voice model is a larger, later change. Details in
+  [technical-design.md](./technical-design.md) (QW-6).
+- **Framework modernization (P8) is the chosen implementation approach, not a user story**:
+  the safety (FR-014/015), context (FR-018/019) and retry (FR-001) requirements are delivered via
+  the LangChain agent **middleware** (`PIIMiddleware`, `SummarizationMiddleware`,
+  `ModelRetryMiddleware`) rather than hand-written nodes — one implementation instead of repeated
+  manual code. This is a *how*, not a *what*. `create_agent` + middleware is the **official, stable**
+  way to build agents in LangChain v1 (an earlier claim that it was "removed in v1.1.0" was a
+  factual error — corrected, see ADR-026). Manual nodes remain only as the legacy fallback for any
+  gap middleware doesn't cover (e.g., injection/off-scope, which are not built-in). Decision in
+  [ADR-026](../../docs/adr/ADR-026-create-agent-middleware-vs-manual.md).
+- **Cold-start keep-alive is optional**: on the free hosting tier, an external uptime pinger can
+  keep services awake to avoid cold-start delay. It is an operational workaround (no code) that
+  becomes unnecessary on a paid tier; reliability against cold starts is already required via
+  retry (FR-001).
+- **Established retry pattern**: the retry approach already used by the TTS and email senders is
+  the pattern extended to the remaining external calls (see ADR-024).
+- **Audio and text share the hardening**: improvements apply to both the text and the
+  voice/transcription paths.
 
-## Referências
+---
 
-- [LangGraph v1.0 Release Notes](https://docs.langchain.com/oss/python/releases/langgraph-v1)
-- [LangChain v1.0 Release Notes](https://docs.langchain.com/oss/python/releases/langchain-v1)
-- [Middleware Overview](https://docs.langchain.com/oss/python/langchain/middleware/overview)
-- [How Middleware Lets You Customize Your Agent Harness](https://www.langchain.com/blog/how-middleware-lets-you-customize-your-agent-harness)
-- [ADR-024 — Retry e Resiliência](../../docs/adr/ADR-024-retry-resilience-strategy.md)
-- [Architecture Roadmap V2.0](../../docs/AgendAI_Architecture_Roadmap.pdf)
+## Out of Scope
+
+- Authentication and per-user session isolation → [Spec 006](../006-auth-session/spec.md)
+- Long-term memory (patient facts) and Human-in-the-Loop confirmations →
+  [Spec 007](../007-memory-hitl/spec.md)
+- Managed cloud guardrails (e.g., provider-side moderation) → later phase
+- Migrating off the managed agent runtime → conditional, later phase
+- Infrastructure-as-code / cloud provisioning → separate spec
+
+---
+
+## Dependencies
+
+- [ADR-024 — Retry & Resilience Strategy](../../docs/adr/ADR-024-retry-resilience-strategy.md)
+  underpins US1 / FR-001–FR-006.
+- [ADR-025 — LangGraph Checkpoint Strategy](../../docs/adr/ADR-025-langgraph-checkpoint-strategy.md)
+  underpins US2 / FR-009–FR-010.
+- [ADR-026 — create_agent + middleware](../../docs/adr/ADR-026-create-agent-middleware-vs-manual.md)
+  records the chosen implementation approach (adopt the official middleware) for FR-001 /
+  FR-014–FR-015 / FR-018–FR-019.
+- [learning-lessons/arquitetura_redis_postgress.md](../../docs/learning-lessons/arquitetura_redis_postgress.md)
+  — latency hierarchy and Redis/Postgres findings informing US2.
+- [AgendAI Constitution](../../.specify/memory/constitution.md) — Principles II (TDD), IV
+  (observability), and VI (security) are directly exercised by this feature.
+- [technical-design.md](./technical-design.md) — the detailed gap analysis, Quick Wins, and
+  model evaluation that feed `/speckit-plan`.
