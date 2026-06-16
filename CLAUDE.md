@@ -147,3 +147,9 @@ Push para `main` dispara:
 2. `.github/workflows/deploy.yml` — builda imagens → push GHCR → aciona 4 deploy hooks Render (api → langgraph → nginx → ui).
 
 GitHub Secrets necessários: `LANGSMITH_API_KEY`, `LANGGRAPH_AUTH_TOKEN`, `RENDER_DEPLOY_HOOK_API`, `RENDER_DEPLOY_HOOK_LANGGRAPH`, `RENDER_DEPLOY_HOOK_NGINX`, `RENDER_DEPLOY_HOOK_UI`.
+
+## Learning Lessons
+
+> Folder: `./docs/learning_lessons/`
+
+- [BFF Proxy Header Forwarding: content-encoding + content-length Truncation](./docs/learning_lessons/bff_proxy_header_forwarding_truncation.md) — 2026-06-16
