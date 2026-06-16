@@ -51,9 +51,30 @@ function getHandlers(): Handlers {
   return _handlers;
 }
 
-export const GET     = (req: NextRequest) => getHandlers().GET(req);
-export const POST    = (req: NextRequest) => getHandlers().POST(req);
-export const PUT     = (req: NextRequest) => getHandlers().PUT(req);
-export const PATCH   = (req: NextRequest) => getHandlers().PATCH(req);
-export const DELETE  = (req: NextRequest) => getHandlers().DELETE(req);
+// Strip upstream encoding/length headers so Next.js can set them correctly.
+// langgraph-nextjs-api-passthrough copies ALL upstream headers verbatim,
+// including content-encoding and content-length. Node.js fetch (undici)
+// decompresses the body transparently, so by the time the BFF forwards it
+// the body is already plain text — but the headers still claim gzip/br and
+// the old (compressed) content-length. Next.js then re-compresses and the
+// lengths no longer match, causing truncated JSON in the browser.
+async function stripEncodingHeaders(p: Promise<Response>): Promise<Response> {
+  const res = await p;
+  const h = new Headers(res.headers);
+  h.delete("content-encoding");
+  h.delete("content-length");
+  h.delete("transfer-encoding");
+  return new Response(res.body, { status: res.status, headers: h });
+}
+
+const wrap =
+  (fn: (req: NextRequest) => Promise<Response>) =>
+  (req: NextRequest) =>
+    stripEncodingHeaders(fn(req));
+
+export const GET     = wrap((req) => getHandlers().GET(req));
+export const POST    = wrap((req) => getHandlers().POST(req));
+export const PUT     = wrap((req) => getHandlers().PUT(req));
+export const PATCH   = wrap((req) => getHandlers().PATCH(req));
+export const DELETE  = wrap((req) => getHandlers().DELETE(req));
 export const OPTIONS = () => getHandlers().OPTIONS();
