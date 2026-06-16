@@ -153,3 +153,4 @@ GitHub Secrets necessários: `LANGSMITH_API_KEY`, `LANGGRAPH_AUTH_TOKEN`, `RENDE
 > Folder: `./docs/learning_lessons/`
 
 - [BFF Proxy Header Forwarding: content-encoding + content-length Truncation](./docs/learning_lessons/bff_proxy_header_forwarding_truncation.md) — 2026-06-16
+- [LangGraph Thread Accumulation: threads/search sem limite degrada com o tempo](./docs/learning_lessons/langgraph_thread_accumulation.md) — 2026-06-16
