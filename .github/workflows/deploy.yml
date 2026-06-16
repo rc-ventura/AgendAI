@@ -116,7 +116,7 @@ jobs:
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/agendai-ui:latest
           build-args: |
-            NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL }}
+            NEXT_PUBLIC_API_URL=https://agendai-nginx.onrender.com
             NEXT_PUBLIC_ASSISTANT_ID=agendai_agent
             NEXT_PUBLIC_LANGGRAPH_API_KEY=${{ secrets.LANGGRAPH_AUTH_TOKEN }}
 
